@@ -1,5 +1,8 @@
 # Buni Palette — handoff from the web prototype (v0.6.0) to the Windows app (v1.0)
 
+> **Status:** v1.0 for Windows is built from this list (root of the repo). Everything under
+> "To do in v1.0" and "Desktop-only items" is in. Kept below as the record of decisions.
+
 Web prototype: https://claude.ai/artifact/TwWLyV36secPfQhtbKp8kz (private to Buni).
 Next step: Windows desktop app, same stack and repo layout as Buni Font Manager
 (github.com/andersonbunidesign/buni-font-manager: Tauri 2 + React + TypeScript, Windows installers built on GitHub).
