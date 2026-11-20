@@ -232,10 +232,35 @@ export function contrast(a: string, b: string): number {
   return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05);
 }
 
-export function contrastGrade(r: number): { label: string; tone: "ok" | "warn" | "bad" } {
-  if (r >= 7) return { label: "AAA", tone: "ok" };
-  if (r >= 4.5) return { label: "AA", tone: "ok" };
-  if (r >= 3) return { label: "Large text only", tone: "warn" };
+/**
+ * APCA contrast (Lc), the method planned for WCAG 3 (APCA-W3 0.0.98G-4g). It follows perception
+ * better than the WCAG 2 ratio, which is too harsh on mid tones such as orange or saturated darks.
+ * About -108 to 106; the sign says light text on dark (negative) or dark on light. Grades use |Lc|.
+ */
+export function apca(text: string, bg: string): number {
+  const y = (hex: string) => {
+    const [r, g, b] = (hexToRgb(hex) ?? [0, 0, 0]).map((v) => (v / 255) ** 2.4);
+    let Y = 0.2126729 * r + 0.7151522 * g + 0.072175 * b;
+    if (Y < 0.022) Y += (0.022 - Y) ** 1.414;
+    return Y;
+  };
+  const yt = y(text), yb = y(bg);
+  if (Math.abs(yb - yt) < 0.0005) return 0;
+  if (yb > yt) {
+    const s = (yb ** 0.56 - yt ** 0.57) * 1.14;
+    return s < 0.1 ? 0 : (s - 0.027) * 100;
+  }
+  const s = (yb ** 0.65 - yt ** 0.62) * 1.14;
+  return s > -0.1 ? 0 : (s + 0.027) * 100;
+}
+
+/** APCA levels: 75 body text, 60 other text, 45 large text, 30 big titles only. */
+export function contrastGrade(lc: number): { label: string; tone: "ok" | "warn" | "bad" } {
+  const v = Math.abs(lc);
+  if (v >= 75) return { label: "Body text", tone: "ok" };
+  if (v >= 60) return { label: "Text", tone: "ok" };
+  if (v >= 45) return { label: "Large text", tone: "warn" };
+  if (v >= 30) return { label: "Big titles only", tone: "warn" };
   return { label: "Too low", tone: "bad" };
 }
 
@@ -321,15 +346,25 @@ export function generate(slots: (string | null)[], rule: Rule, pool: string[], r
   const used = new Set(locked);
   const out = slots.slice();
   const offsets = rule === "free" ? null : OFFSETS[rule];
-  // Start the rule cycle after the hues the locked colours already cover.
-  let cursor = rule === "free" ? 0 : Math.min(locked.length, offsets!.length) % offsets!.length;
+  // Hues already taken: the locked colours (greys don't count), then each new colour as it's chosen.
+  const hues = chromatic.map((c) => c[2]);
+  const near = rule === "mono" ? 0 : 25;
+  const takeHue = (hex: string) => {
+    const c = rgbToOklch(hexToRgb(hex)!);
+    if (c[1] > 0.03) hues.push(c[2]);
+  };
 
   free.forEach((slot, k) => {
     let target: number;
     if (!offsets) target = rand() * 360;
     else {
-      target = wrap(base + offsets[cursor % offsets.length] + (rand() - 0.5) * (rule === "mono" ? 8 : 18));
-      cursor++;
+      // The new colour goes to the harmony position with the fewest colours near it, so with
+      // warm colours locked, Complementary, Triad and Tetradic reach the other side of the wheel.
+      // Ties are broken at random, so each Space press can land somewhere else.
+      const counts = offsets.map((o) => hues.filter((h) => hueDist(h, wrap(base + o)) <= near).length);
+      const least = Math.min(...counts);
+      const spots = offsets.filter((_, i) => counts[i] === least);
+      target = wrap(base + spots[Math.floor(rand() * spots.length)] + (rand() - 0.5) * (rule === "mono" ? 8 : 18));
     }
     if (poolLch.length) {
       const ranked = poolLch
@@ -340,12 +375,14 @@ export function generate(slots: (string | null)[], rule: Rule, pool: string[], r
       if (pick) {
         used.add(pick.hex);
         out[slot] = pick.hex;
+        takeHue(pick.hex);
         return;
       }
     }
     const chroma = rule === "mono" ? 0.03 + rand() * 0.1 : 0.05 + rand() * 0.15;
     const L = lights[k];
     out[slot] = oklchToHex([L, chroma * (1 - Math.abs(L - 0.6)), target]);
+    takeHue(out[slot]!);
   });
   return out as string[];
 }

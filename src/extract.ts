@@ -84,7 +84,9 @@ export async function sampleAt(url: string, x: number, y: number): Promise<strin
  * The `count` main colours of an image, largest area first. Each colour keeps the
  * position of a pixel that matches it, so the app can show where it came from.
  */
-export async function extract(url: string, count: number): Promise<Swatch[]> {
+/** The main colours of an image. A different `seed` (Resample) finds a different set. */
+export async function extract(url: string, count: number, seed = 0): Promise<Swatch[]> {
+  if (count < 1) return [];
   const { data, w, h } = await pixels(url);
   const pts: { lab: Lab; x: number; y: number }[] = [];
   for (let y = 0; y < h; y++)
@@ -95,7 +97,7 @@ export async function extract(url: string, count: number): Promise<Swatch[]> {
     }
   if (!pts.length) return [];
   const k = Math.min(count, pts.length);
-  const rand = seeded(pts.length * 7919 + k);
+  const rand = seeded(pts.length * 7919 + k + seed * 104729);
   const d2 = (a: Lab, b: Lab) => (a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2 + (a[2] - b[2]) ** 2;
 
   // k-means++ seeding: spread the starting centres so small accent colours get a chance.

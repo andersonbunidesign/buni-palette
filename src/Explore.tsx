@@ -4,7 +4,7 @@ import { api, errText, type UnsplashPhoto } from "./api";
 import { extract, type Swatch } from "./extract";
 import { formatValue } from "./color";
 import { nextName, uid, type Palette, type RefImage } from "./store";
-import { IconCheck, IconDots, IconMinus, IconPlus, IconSearch, IconSwatches } from "./icons";
+import { IconCheck, IconDots, IconImage, IconMinus, IconPlus, IconSearch, IconSwatches } from "./icons";
 import { copyText } from "./References";
 
 interface Result {
@@ -68,6 +68,22 @@ export function Explore({ ctx }: { ctx: Ctx }) {
   const anchor = useRef<string | null>(null);
   const dragIds = useRef<string[]>([]);
   const [, bump] = useState(0);
+  // Photo above each palette, or palettes only (like Adobe Color's two views). Remembered.
+  const [photos, setPhotosState] = useState(() => {
+    try {
+      return localStorage.getItem("bp.keywordPhotos") === "1";
+    } catch {
+      return false;
+    }
+  });
+  const setPhotos = (v: boolean) => {
+    setPhotosState(v);
+    try {
+      localStorage.setItem("bp.keywordPhotos", v ? "1" : "0");
+    } catch {
+      /* remembered for this visit only */
+    }
+  };
   const count = search?.count ?? 5;
 
   useEffect(() => {
@@ -125,7 +141,7 @@ export function Explore({ ctx }: { ctx: Ctx }) {
     try {
       const pals: Palette[] = [];
       const refs: RefImage[] = [];
-      const kw = search?.query ?? "Explore";
+      const kw = search?.query ?? "Keywords";
       for (const r of list) {
         const p = r.photo;
         const blob = new Blob([await api.unsplashImage(p.urls.regular)]);
@@ -216,7 +232,7 @@ export function Explore({ ctx }: { ctx: Ctx }) {
       <div className="titlebar">
         <div>
           <p className="kicker">
-            Explore{search ? ` · ${search.total.toLocaleString("en")} photos for "${search.query}"` : ""}
+            Keywords{search ? ` · ${search.total.toLocaleString("en")} photos for "${search.query}"` : ""}
             {sel.length ? ` · ${sel.length} selected` : ""}
           </p>
           <h1>Find palettes by keyword</h1>
@@ -251,6 +267,16 @@ export function Explore({ ctx }: { ctx: Ctx }) {
         <button type="submit" className="btn primary" disabled={busy || !text.trim() || hasKey === false}>
           {busy && !search?.results.length ? "Searching…" : "Search"}
         </button>
+        <button
+          type="button"
+          className="round"
+          aria-pressed={photos}
+          aria-label="Show photos"
+          title={photos ? "Hide the photos (palettes only)" : "Show the photo above each palette"}
+          onClick={() => setPhotos(!photos)}
+        >
+          <IconImage />
+        </button>
         <span className="label">Colours per photo</span>
         <div className="counter">
           <button type="button" className="icon-btn" aria-label="One colour less" disabled={count <= 2} onClick={() => setCount(count - 1)}>
@@ -265,7 +291,7 @@ export function Explore({ ctx }: { ctx: Ctx }) {
 
       {hasKey === false ? (
         <div className="empty">
-          <b>Explore needs an Unsplash access key</b>
+          <b>Keywords needs an Unsplash access key</b>
           <span>
             It's free: make an app at unsplash.com/developers, copy its Access Key and paste it in Settings. Results are palettes read from
             the photos, like the ones from your own references.
@@ -283,14 +309,14 @@ export function Explore({ ctx }: { ctx: Ctx }) {
           <b>Search photos by keyword</b>
           <span>
             Each photo becomes a palette. Select the ones you like and save them to {ctx.project.name}, or drag them onto a project in the sidebar.
-            Saved palettes are named after the keyword and their photo goes into Project references.
+            Saved palettes are named after the keyword and their photo goes into Image Sampling.
           </span>
         </div>
       ) : null}
 
       {results.length > 0 && (
         <>
-          <div className="pgrid" onClick={(e) => e.target === e.currentTarget && setSel([])}>
+          <div className={`pgrid${photos ? " with-photos" : ""}`} onClick={(e) => e.target === e.currentTarget && setSel([])}>
             {results.map((r) => {
               const id = r.photo.id;
               const picked = sel.includes(id);
@@ -322,6 +348,11 @@ export function Explore({ ctx }: { ctx: Ctx }) {
                     setTimeout(() => (dragIds.current = []), 0);
                   }}
                 >
+                  {photos && (
+                    <div className="pphoto">
+                      <img src={r.photo.urls.small} alt={r.photo.alt_description ?? ""} draggable={false} />
+                    </div>
+                  )}
                   <div className="pstrip">
                     {r.colors
                       ? r.colors.map((c, i) => (

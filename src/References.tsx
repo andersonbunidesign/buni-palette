@@ -5,7 +5,7 @@ import { nextName, refUrl, uid } from "./store";
 import { api } from "./api";
 import { extract, sampleAt, type Swatch } from "./extract";
 import { formatValue, readableInk } from "./color";
-import { IconPaste, IconTrash, IconUpload, IconX, IconSwatches, IconShuffle } from "./icons";
+import { IconPaste, IconTrash, IconUpload, IconX, IconSwatches, IconShuffle, IconReset } from "./icons";
 
 export function copyText(text: string, e: { clientX: number; clientY: number }, ctx: Ctx) {
   api.copyText(text).then(
@@ -47,7 +47,7 @@ export function References({ ctx }: { ctx: Ctx }) {
     <>
       <div className="titlebar">
         <div>
-          <p className="kicker">Project references</p>
+          <p className="kicker">Image Sampling</p>
           <h1>{project.name}</h1>
         </div>
         <div className="tools">
@@ -77,9 +77,10 @@ export function References({ ctx }: { ctx: Ctx }) {
           <b>Collect references for this project</b>
           <span>
             Drop images here, use Add images, or take a screenshot and press <span className="kbd">Ctrl</span> +{" "}
-            <span className="kbd">V</span>. Palettes saved from Explore bring their photo here too.
+            <span className="kbd">V</span>. Palettes saved from Keywords bring their photo here too.
             <br />
-            The app pulls the main colours from each image. Click anywhere on an image to pick a colour yourself.
+            The app pulls the main colours from each image. Click anywhere on an image to pick a colour yourself: those get a small
+            triangle in the corner and stay when you Resample or move the slider.
           </span>
         </div>
       ) : (
@@ -158,19 +159,24 @@ function RefCard(props: {
   const update = (fn: (x: RefImage) => RefImage) =>
     ctx.updateProject((p) => ({ ...p, refs: p.refs.map((x) => (x.id === r.id ? fn(x) : x)) }));
 
-  const reExtract = async (n: number) => {
+  // `count` is the number of automatic colours; the slider shows the total with the hand-picked ones,
+  // and moving it recalculates only the automatic ones.
+  const reExtract = async (n: number, seed = r.seed ?? 0) => {
     setCount(n);
     const ticket = ++busy.current;
-    const auto = await extract(refUrl(r), n);
-    if (ticket === busy.current) update((x) => ({ ...x, count: n, auto }));
+    const auto = await extract(refUrl(r), n, seed);
+    if (ticket === busy.current) update((x) => ({ ...x, count: n, auto, seed }));
   };
+  const total = count + r.picked.length;
+  const maxTotal = Math.max(16, r.picked.length + 1);
+  const [showDots, setShowDots] = useState(false);
 
   const pos = (e: React.MouseEvent) => {
     const b = imgRef.current!.getBoundingClientRect();
     return { x: Math.min(1, Math.max(0, (e.clientX - b.left) / b.width)), y: Math.min(1, Math.max(0, (e.clientY - b.top) / b.height)) };
   };
 
-  const pct = ((count - 1) / (16 - 1)) * 100;
+  const pct = ((total - 1) / (maxTotal - 1)) * 100;
   // One list: the extracted colours first, then the ones picked by hand. Any can be removed;
   // removing an extracted one lowers the colour count by one.
   const remove = (s: Swatch, auto: boolean) => {
@@ -186,9 +192,9 @@ function RefCard(props: {
     <button
       key={s.hex + s.x}
       type="button"
-      className={`sw${traySet.has(s.hex) ? " in-tray" : ""}`}
+      className={`sw${traySet.has(s.hex) ? " in-tray" : ""}${auto ? "" : " picked"}`}
       style={{ background: s.hex, color: readableInk(s.hex) }}
-      title={`${formatValue(s.hex, ctx.mode)}: click to collect`}
+      title={`${formatValue(s.hex, ctx.mode)}${auto ? "" : " (picked by hand)"}: click to collect`}
       onMouseEnter={() => setHover(s)}
       onMouseLeave={() => setHover(null)}
       onFocus={() => setHover(s)}
@@ -220,7 +226,11 @@ function RefCard(props: {
           const hex = await sampleAt(refUrl(r), p.x, p.y);
           setLoupe(hex ? { ...p, hex } : null);
         }}
-        onMouseLeave={() => setLoupe(null)}
+        onMouseEnter={() => setShowDots(true)}
+        onMouseLeave={() => {
+          setLoupe(null);
+          setShowDots(false);
+        }}
         onClick={async (e) => {
           const p = pos(e);
           const hex = await sampleAt(refUrl(r), p.x, p.y);
@@ -231,6 +241,11 @@ function RefCard(props: {
         title="Click to pick a colour"
       >
         <img src={refUrl(r)} alt={r.name} draggable={false} />
+        {/* Where every colour came from shows only while the mouse is on the image. */}
+        {showDots &&
+          [...r.auto, ...r.picked]
+            .filter((s) => s.x >= 0 && s !== hover)
+            .map((s, i) => <span key={i} className="marker small" style={{ left: `${s.x * 100}%`, top: `${s.y * 100}%`, background: s.hex }} />)}
         {hover && hover.x >= 0 && (
           <span className="marker" style={{ left: `${hover.x * 100}%`, top: `${hover.y * 100}%`, background: hover.hex }} />
         )}
@@ -267,17 +282,17 @@ function RefCard(props: {
         </div>
         <div className="ref-row">
           <label className="label num" htmlFor={`count-${r.id}`} style={{ minWidth: 72 }}>
-            {count} colours
+            {total} colours
           </label>
           <input
             id={`count-${r.id}`}
             type="range"
             className="slider"
-            min={1}
-            max={16}
-            value={count}
+            min={Math.max(1, r.picked.length)}
+            max={maxTotal}
+            value={total}
             style={{ "--fill": `${pct}%` } as React.CSSProperties}
-            onChange={(e) => reExtract(Number(e.target.value))}
+            onChange={(e) => reExtract(Math.max(0, Number(e.target.value) - r.picked.length))}
           />
         </div>
         <div className="chips-sw">
@@ -285,6 +300,15 @@ function RefCard(props: {
           {r.picked.map((s) => sw(s, false))}
         </div>
         <div className="ref-actions">
+          <button
+            type="button"
+            className="btn small"
+            title="Find a different set of automatic colours (hand-picked ones stay)"
+            disabled={count < 1}
+            onClick={() => reExtract(count, ((r.seed ?? 0) + 1 + Math.floor(Math.random() * 1000)) % 100000)}
+          >
+            <IconReset size={16} /> Resample
+          </button>
           <button type="button" className="btn small" onClick={props.onGen}>
             <IconShuffle size={16} /> Open in generator
           </button>

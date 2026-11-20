@@ -1,5 +1,10 @@
 # Buni Palette — handoff from the web prototype (v0.6.0) to the Windows app (v1.0)
 
+> **1.1:** tabs renamed Color Palettes / Image Sampling / Keywords; Illustrator export from an open palette;
+> one text object per line in the .ai; APCA contrast; font list in each font's own face; Lock all / Unlock all;
+> harmony fix with locked colours; undo (toast + Ctrl+Z); Keywords photo toggle; Image Sampling: dots on hover,
+> slider counts the total, Resample, triangle on hand-picked colours; new icon.
+>
 > **Status:** v1.0 for Windows is built from this list (root of the repo). Everything under
 > "To do in v1.0" and "Desktop-only items" is in. Kept below as the record of decisions.
 

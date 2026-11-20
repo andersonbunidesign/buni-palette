@@ -212,12 +212,15 @@ function main() {
       else if (col.label) lines.push(col.label);
       lines.push(col.hex);
       lines.push(MODE == "cmyk" ? col.cmyk.join(" ") : col.rgb.join(" "));
-      var lt = art.textFrames.pointText([x + 2, y - SQ - 12]);
-      lt.contents = lines.join("\r");
-      var a = lt.textRange.characterAttributes;
-      a.size = 7; a.fillColor = ink();
-      if (labelFont) a.textFont = labelFont;
-      try { lt.textRange.paragraphAttributes.spaceBefore = 0; lt.textRange.characterAttributes.leading = 9; lt.textRange.characterAttributes.autoLeading = false; } catch (e) {}
+      // One text object per line, so lines that aren't needed can be deleted one by one.
+      for (var li = 0; li < lines.length; li++) {
+        var lt = art.textFrames.pointText([x + 2, y - SQ - 12 - li * 9]);
+        lt.contents = lines[li];
+        lt.name = lines[li];
+        var a = lt.textRange.characterAttributes;
+        a.size = 7; a.fillColor = ink();
+        if (labelFont) a.textFont = labelFont;
+      }
     }
   }
   var note = layer.textFrames.pointText([L0 + MARGIN, T0 - H + 18]);

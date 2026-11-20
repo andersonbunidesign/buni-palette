@@ -1,6 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { Ctx } from "./App";
-import { contrast, contrastGrade, formatValue } from "./color";
+import { apca, contrastGrade, formatValue } from "./color";
 import { IconArrowLeft, IconFocus, IconGray, IconSwap } from "./icons";
 import { ColorPopover } from "./Generator";
 import { useWindowFullscreen } from "./platform";
@@ -31,24 +31,83 @@ const GOOGLE = new Set(FONTS[1].list);
 const loaded = new Set<string>();
 /** Fonts from Buni Font Manager projects are picked as "fm:<id>" and loaded from their files. */
 const fmFonts = new Map<string, FmFont>();
-function useFont(name: string) {
-  useEffect(() => {
-    if (loaded.has(name)) return;
-    if (name.startsWith("fm:")) {
-      const f = fmFonts.get(name.slice(3));
-      if (!f) return;
-      loaded.add(name);
-      const face = new FontFace(`bfm-${f.id}`, `url("${fileUrl(f.path)}")`);
-      face.load().then((ff) => document.fonts.add(ff), () => loaded.delete(name));
-      return;
-    }
-    if (!GOOGLE.has(name)) return;
+function ensureFont(name: string) {
+  if (loaded.has(name)) return;
+  if (name.startsWith("fm:")) {
+    const f = fmFonts.get(name.slice(3));
+    if (!f) return;
     loaded.add(name);
-    const link = document.createElement("link");
-    link.rel = "stylesheet";
-    link.href = `https://fonts.googleapis.com/css2?family=${encodeURIComponent(name)}:wght@400;700&display=swap`;
-    document.head.appendChild(link);
-  }, [name]);
+    const face = new FontFace(`bfm-${f.id}`, `url("${fileUrl(f.path)}")`);
+    face.load().then((ff) => document.fonts.add(ff), () => loaded.delete(name));
+    return;
+  }
+  if (!GOOGLE.has(name)) return;
+  loaded.add(name);
+  const link = document.createElement("link");
+  link.rel = "stylesheet";
+  link.href = `https://fonts.googleapis.com/css2?family=${encodeURIComponent(name)}:wght@400;700&display=swap`;
+  document.head.appendChild(link);
+}
+function useFont(name: string) {
+  useEffect(() => ensureFont(name), [name]);
+}
+const fontLabel = (v: string) => (v.startsWith("fm:") ? fmFonts.get(v.slice(3))?.name ?? "Segoe UI" : v);
+
+/** Font list where every name is shown in its own font (a Windows list can't do that). */
+function FontPicker({ id, value, groups, onChange }: { id: string; value: string; groups: { group: string; list: string[] }[]; onChange: (v: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    for (const g of groups) for (const v of g.list) ensureFont(v);
+    ref.current?.querySelector<HTMLElement>(".font-opt.on")?.scrollIntoView({ block: "center" });
+    const down = (e: PointerEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    const key = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.stopPropagation();
+      setOpen(false);
+    };
+    window.addEventListener("pointerdown", down);
+    window.addEventListener("keydown", key, true);
+    return () => {
+      window.removeEventListener("pointerdown", down);
+      window.removeEventListener("keydown", key, true);
+    };
+  }, [open, groups]);
+  return (
+    <div className="font-pick" ref={ref}>
+      <button id={id} type="button" className="select font-select" aria-haspopup="listbox" aria-expanded={open} style={{ fontFamily: stack(value) }} onClick={() => setOpen(!open)}>
+        {fontLabel(value)}
+      </button>
+      {open && (
+        <div className="font-list" role="listbox">
+          {groups.map((g) => (
+            <div key={g.group} role="group" aria-label={g.group}>
+              <div className="font-group">{g.group}</div>
+              {g.list.map((v) => (
+                <button
+                  key={v}
+                  type="button"
+                  role="option"
+                  aria-selected={v === value}
+                  className={`font-opt${v === value ? " on" : ""}`}
+                  style={{ fontFamily: stack(v) }}
+                  onClick={() => {
+                    onChange(v);
+                    setOpen(false);
+                  }}
+                >
+                  {fontLabel(v)}
+                </button>
+              ))}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
 }
 const stack = (name: string) => `"${name.startsWith("fm:") ? `bfm-${name.slice(3)}` : name}", "Segoe UI", system-ui, sans-serif`;
 
@@ -103,7 +162,7 @@ export function TextTest({ ctx, colors, name, backLabel, onBack }: { ctx: Ctx; c
   const hexOf = (c: Choice, which: "bg" | "ink") => ("pal" in c ? colors[c.pal]?.hex ?? "#FFFFFF" : c.own === "custom" ? custom[which] : OWN[c.own]);
   const bgHex = hexOf(bg, "bg");
   const inkHex = hexOf(ink, "ink");
-  const ratio = contrast(bgHex, inkHex);
+  const ratio = apca(inkHex, bgHex);
   const grade = contrastGrade(ratio);
 
   useEffect(() => {
@@ -111,7 +170,7 @@ export function TextTest({ ctx, colors, name, backLabel, onBack }: { ctx: Ctx; c
       const t = e.target as HTMLElement;
       if (t && (t.tagName === "INPUT" || t.tagName === "SELECT")) return;
       if (e.key === "Escape") {
-        if (document.querySelector(".color-pop")) return;
+        if (document.querySelector(".color-pop, .font-list")) return;
         if (full) setFull(false);
         else onBack();
       } else if (e.key.toLowerCase() === "g" && !e.ctrlKey && !e.metaKey) setGray((g) => !g);
@@ -138,7 +197,7 @@ export function TextTest({ ctx, colors, name, backLabel, onBack }: { ctx: Ctx; c
         {colors.map((c, i) => (
           <button key={i} type="button" className="sw" style={{ background: c.hex }} aria-pressed={same(cur, { pal: i })} aria-label={`${what} ${label(c)}`} title={label(c)} onClick={() => pick({ pal: i })} />
         ))}
-        <span className="pick-sep" aria-hidden="true" />
+        <span className="pick-break" aria-hidden="true" />
         <button type="button" className="sw own" style={{ background: OWN.black }} aria-pressed={same(cur, { own: "black" })} aria-label={`${what} black`} title="Black" onClick={() => pick({ own: "black" })} />
         <button type="button" className="sw own" style={{ background: OWN.white }} aria-pressed={same(cur, { own: "white" })} aria-label={`${what} white`} title="White" onClick={() => pick({ own: "white" })} />
         <button
@@ -158,28 +217,11 @@ export function TextTest({ ctx, colors, name, backLabel, onBack }: { ctx: Ctx; c
     );
   };
 
-  const fontSelect = (k: "title" | "body") => (
-    <select id={`font-${k}`} className="select font-select" value={okFont(fonts[k])} onChange={(e) => setFont(k, e.target.value)} style={{ fontFamily: stack(fonts[k]) }}>
-      {fm.map((p) => (
-        <optgroup key={`fm-${p.name}`} label={`Font Manager · ${p.name}`}>
-          {p.fonts.filter((f) => f.index === 0).map((f) => (
-            <option key={f.id} value={`fm:${f.id}`}>
-              {f.name}
-            </option>
-          ))}
-        </optgroup>
-      ))}
-      {FONTS.map((g) => (
-        <optgroup key={g.group} label={g.group}>
-          {g.list.map((f) => (
-            <option key={f} value={f}>
-              {f}
-            </option>
-          ))}
-        </optgroup>
-      ))}
-    </select>
-  );
+  const groups = [
+    ...fm.map((p) => ({ group: `Font Manager · ${p.name}`, list: p.fonts.filter((f) => f.index === 0).map((f) => `fm:${f.id}`) })),
+    ...FONTS,
+  ];
+  const fontSelect = (k: "title" | "body") => <FontPicker id={`font-${k}`} value={okFont(fonts[k])} groups={groups} onChange={(v) => setFont(k, v)} />;
 
   return (
     <div className={`text-test${full ? " full" : ""}`}>
@@ -219,10 +261,10 @@ export function TextTest({ ctx, colors, name, backLabel, onBack }: { ctx: Ctx; c
             <h3>Contrast</h3>
             <div className="ratio">
               <Led ratio={ratio} />
-              <b>{ratio.toFixed(2)}:1</b>
+              <b>Lc {Math.round(Math.abs(ratio))}</b>
               <span className={`grade ${grade.tone}`}>{grade.label}</span>
             </div>
-            <span className="sw-label">Green: fine for body text (4.5:1). Yellow: large titles only (3:1). Red: too low.</span>
+            <span className="sw-label">APCA, the newer method that follows how we see contrast. Green: text (Lc 60 and up, 75 for body text). Yellow: large text (45) or big titles only (30). Red: too low.</span>
           </div>
           <div className="field-wrap">
             <label className="label" htmlFor="tt-title">
@@ -266,14 +308,14 @@ export function TextTest({ ctx, colors, name, backLabel, onBack }: { ctx: Ctx; c
               {colors.flatMap((b, bi) =>
                 colors.map((t, ti) => {
                   if (bi === ti) return null;
-                  const r = contrast(b.hex, t.hex);
+                  const r = apca(t.hex, b.hex);
                   return (
                     <button
                       key={`${bi}-${ti}`}
                       type="button"
                       className="pair-tile"
                       style={{ background: b.hex, color: t.hex }}
-                      title={`${r.toFixed(2)}:1 · ${contrastGrade(r).label}`}
+                      title={`Lc ${Math.round(Math.abs(r))} · ${contrastGrade(r).label}`}
                       onClick={() => {
                         setBg({ pal: bi });
                         setInk({ pal: ti });
@@ -281,7 +323,7 @@ export function TextTest({ ctx, colors, name, backLabel, onBack }: { ctx: Ctx; c
                     >
                       <Led ratio={r} />
                       <b>Aa</b>
-                      <span>{r.toFixed(1)}</span>
+                      <span>{Math.round(Math.abs(r))}</span>
                     </button>
                   );
                 }),

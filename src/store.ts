@@ -41,6 +41,8 @@ export interface RefImage {
   count: number;
   auto: Swatch[];
   picked: Swatch[];
+  /** Changed by Resample, so the automatic colours come out different. */
+  seed?: number;
   /** Photos saved from Explore: who took them, for the credit Unsplash asks for. */
   source?: { author: string; authorUrl: string; photoUrl: string; keyword: string };
 }

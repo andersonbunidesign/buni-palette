@@ -95,9 +95,9 @@ export function Settings(props: { state: AppState; onClose: () => void; onClear:
 
         <section className="set-row">
           <div>
-            <h3>Explore · Unsplash access key</h3>
+            <h3>Keywords · Unsplash access key</h3>
             <p className="muted">
-              Explore searches Unsplash photos by keyword. Make a free key at{" "}
+              Keywords searches Unsplash photos by keyword. Make a free key at{" "}
               <a href="https://unsplash.com/developers" target="_blank" rel="noreferrer">
                 unsplash.com/developers
               </a>{" "}

@@ -17,7 +17,6 @@ export function Palettes({ ctx }: { ctx: Ctx }) {
   const anchor = useRef<string | null>(null);
   const [renaming, setRenaming] = useState<string | null>(null);
   const [text, setText] = useState("");
-  const [confirmDelete, setConfirmDelete] = useState(false);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -30,9 +29,8 @@ export function Palettes({ ctx }: { ctx: Ctx }) {
       }
       if (e.key === "Escape") {
         setSel([]);
-        setConfirmDelete(false);
       }
-      if ((e.key === "Delete" || e.key === "Backspace") && sel.length) setConfirmDelete(true);
+      if ((e.key === "Delete" || e.key === "Backspace") && sel.length) deleteSelected();
       if (e.code === "Space" && !e.repeat && sel.length) {
         e.preventDefault();
         ctx.openPalette(anchor.current && sel.includes(anchor.current) ? anchor.current : sel[0], true);
@@ -45,6 +43,7 @@ export function Palettes({ ctx }: { ctx: Ctx }) {
   const setPalettes = (fn: (ps: Palette[]) => Palette[]) => ctx.updateProject((pr) => ({ ...pr, palettes: fn(pr.palettes) }));
   const commitRename = () => {
     const name = text.trim();
+    if (renaming && name && name !== all.find((p) => p.id === renaming)?.name) ctx.checkpoint("rename");
     if (renaming && name) setPalettes((ps) => ps.map((p) => (p.id === renaming ? { ...p, name } : p)));
     setRenaming(null);
   };
@@ -64,10 +63,10 @@ export function Palettes({ ctx }: { ctx: Ctx }) {
 
   const deleteSelected = () => {
     const n = sel.length;
+    ctx.checkpoint("delete");
     setPalettes((ps) => ps.filter((p) => !sel.includes(p.id)));
     setSel([]);
-    setConfirmDelete(false);
-    ctx.toast(n === 1 ? "Deleted 1 palette" : `Deleted ${n} palettes`);
+    ctx.toast(n === 1 ? "Deleted 1 palette" : `Deleted ${n} palettes`, true);
   };
 
   const actions = (p: Palette) =>
@@ -100,7 +99,7 @@ export function Palettes({ ctx }: { ctx: Ctx }) {
               <button type="button" className="btn" title="Export the selected palettes to an Illustrator file" onClick={() => ctx.exportPalettes(all.filter((p) => sel.includes(p.id)))}>
                 <IconArtwork /> Illustrator
               </button>
-              <button type="button" className="btn" onClick={() => setConfirmDelete(true)}>
+              <button type="button" className="btn" onClick={deleteSelected}>
                 <IconTrash /> Delete
               </button>
             </div>
@@ -114,22 +113,6 @@ export function Palettes({ ctx }: { ctx: Ctx }) {
         </div>
       </div>
 
-      {confirmDelete && sel.length > 0 && (
-        <div className="flash" role="alertdialog" aria-label="Confirm delete">
-          <span>
-            Delete {sel.length === 1 ? `"${all.find((p) => p.id === sel[0])?.name}"` : `${sel.length} palettes`}? This can't be undone.
-          </span>
-          <div className="tools">
-            <button type="button" className="btn small" onClick={() => setConfirmDelete(false)}>
-              Keep
-            </button>
-            <button type="button" className="btn small danger" onClick={deleteSelected}>
-              Delete
-            </button>
-          </div>
-        </div>
-      )}
-
       {project.example && (
         <p className="note">
           An example project with sample palettes to try things out. Click to select, Ctrl or Shift to select several. Space opens the
@@ -140,7 +123,7 @@ export function Palettes({ ctx }: { ctx: Ctx }) {
       {all.length === 0 ? (
         <div className="empty">
           <b>No palettes yet</b>
-          <span>Start a new one, save one from an image in Project references, or find some in Explore.</span>
+          <span>Start a new one, save one from an image in Image Sampling, or find some in Keywords.</span>
           <button type="button" className="btn primary" onClick={ctx.newPalette}>
             <IconPlus /> New palette
           </button>
@@ -201,6 +184,7 @@ export function Palettes({ ctx }: { ctx: Ctx }) {
                   e.preventDefault();
                   const r = e.currentTarget.getBoundingClientRect();
                   const after = e.clientX > r.left + r.width / 2;
+                  ctx.checkpoint("reorder");
                   setPalettes((ps) => {
                     const moving = ps.filter((x) => ids.includes(x.id));
                     const rest = ps.filter((x) => !ids.includes(x.id));

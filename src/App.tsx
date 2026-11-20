@@ -21,7 +21,7 @@ import { paletteImage } from "./share";
 import { copyText } from "./References";
 
 /** Set from the desktop app when it starts. */
-export let VERSION = "1.0.0";
+export let VERSION = "1.1.0";
 
 export type View = "refs" | "gen" | "palettes" | "text" | "explore";
 
@@ -34,7 +34,10 @@ export interface Ctx {
   setGen: (g: GenState) => void;
   gen: GenState;
   go: (v: View) => void;
-  toast: (msg: string) => void;
+  /** A short message; `undo` adds an Undo button to it. */
+  toast: (msg: string, undo?: boolean) => void;
+  /** Call before a change that Ctrl+Z (on Color Palettes) or the Undo button can take back. */
+  checkpoint: (label: string) => void;
   note: (msg: string, e: { clientX: number; clientY: number }) => void;
   mode: ValueMode;
   tray: string[];
@@ -106,7 +109,11 @@ export function App() {
   const [cmykVersion, setCmykVersion] = useState(0);
   const exploreDrop = useRef<((projectId: string) => void) | null>(null);
   const [focusPal, setFocusPal] = useState<string | null>(null);
-  const [toastMsg, setToastMsg] = useState<string | null>(null);
+  const [toastMsg, setToastMsg] = useState<{ text: string; undo: boolean } | null>(null);
+  // Undo for changes made on Color Palettes and in the sidebar: snapshots of the projects before each change.
+  const undoStack = useRef<{ label: string; state: AppState }[]>([]);
+  const stateRef = useRef<AppState | null>(null);
+  stateRef.current = state;
   const [cursorNote, setCursorNote] = useState<{ text: string; x: number; y: number } | null>(null);
   const [tray, setTray] = useState<string[]>([]);
   const [menu, setMenu] = useState<string | null>(null);
@@ -121,8 +128,6 @@ export function App() {
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", theme);
   }, [theme]);
-  const stateRef = useRef<AppState | null>(null);
-  stateRef.current = state;
 
   const loadCmyk = useCallback(() => {
     api
@@ -149,7 +154,10 @@ export function App() {
         } catch {
           saved = null;
         }
-        setState(saved && saved.projects?.length ? migrate(saved) : sampleState());
+        const st0 = saved && saved.projects?.length ? migrate(saved) : sampleState();
+        setState(st0);
+        // Image files no project uses (left from an earlier session) are removed.
+        api.clearImages(st0.projects.flatMap((p) => p.refs.flatMap((r) => [r.file, r.thumb]))).catch(() => {});
       })
       .catch(() => setState(sampleState()));
     loadCmyk();
@@ -181,6 +189,8 @@ export function App() {
       // Image files no reference uses any more are deleted.
       const files = (st: AppState) => new Set(st.projects.flatMap((p) => p.refs.flatMap((r) => [r.file, r.thumb])));
       const now = files(next);
+      // Images a change could still bring back with Undo stay until the app starts again.
+      for (const u of undoStack.current) for (const f of files(u.state)) now.add(f);
       const gone = Array.from(files(s)).filter((f) => f && !now.has(f));
       if (gone.length) api.deleteImages(gone).catch(() => {});
       return next;
@@ -188,11 +198,39 @@ export function App() {
   }, []);
 
   const toastTimer = useRef(0);
-  const toast = useCallback((msg: string) => {
-    setToastMsg(msg);
+  const toast = useCallback((msg: string, undo = false) => {
+    setToastMsg({ text: msg, undo });
     clearTimeout(toastTimer.current);
-    toastTimer.current = window.setTimeout(() => setToastMsg(null), 2600);
+    toastTimer.current = window.setTimeout(() => setToastMsg(null), undo ? 7000 : 2600);
   }, []);
+  const checkpoint = useCallback((label: string) => {
+    if (!stateRef.current) return;
+    undoStack.current.push({ label, state: stateRef.current });
+    if (undoStack.current.length > 40) undoStack.current.shift();
+  }, []);
+  const undo = useCallback(() => {
+    const last = undoStack.current.pop();
+    if (!last) {
+      toast("Nothing to undo");
+      return;
+    }
+    // Projects and palettes go back; colour mode, guides and open generators stay as they are.
+    set((s) => ({ ...s, projects: last.state.projects, current: last.state.projects.some((p) => p.id === s.current) ? s.current : last.state.current, gen: { ...last.state.gen, ...s.gen } }));
+    toast(`Undid ${last.label}`);
+  }, [set, toast]);
+  // Ctrl+Z on Color Palettes undoes the last delete, move, copy, rename, duplicate or reorder.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey) || e.shiftKey || e.key.toLowerCase() !== "z" || view !== "palettes") return;
+      const t = e.target as HTMLElement;
+      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT")) return;
+      if (document.querySelector(".overlay, .compare")) return;
+      e.preventDefault();
+      undo();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [view, undo]);
   const noteTimer = useRef(0);
   const note = useCallback((text: string, e: { clientX: number; clientY: number }) => {
     setCursorNote({ text, x: e.clientX + 14, y: e.clientY + 14 });
@@ -361,6 +399,7 @@ export function App() {
         label: "Duplicate",
         onClick: () => {
           const copy: Palette = { ...p, id: uid(), name: `${p.name} copy`, created: Date.now(), colors: p.colors.map((c) => ({ ...c })) };
+          checkpoint("duplicate");
           set((s) => ({
             ...s,
             projects: s.projects.map((pr) => {
@@ -369,15 +408,16 @@ export function App() {
               return { ...pr, palettes: [...pr.palettes.slice(0, i + 1), copy, ...pr.palettes.slice(i + 1)] };
             }),
           }));
-          toast("Duplicated");
+          toast("Duplicated", true);
         },
       },
       {
         label: "Delete",
         danger: true,
         onClick: () => {
+          checkpoint("delete");
           set((s) => ({ ...s, projects: s.projects.map((pr) => (pr.id === projectId ? { ...pr, palettes: pr.palettes.filter((x) => x.id !== p.id) } : pr)) }));
-          toast(`Deleted "${p.name}"`);
+          toast(`Deleted "${p.name}"`, true);
         },
       },
     );
@@ -421,6 +461,7 @@ export function App() {
       setView(v);
     },
     toast,
+    checkpoint,
     note,
     mode: state.mode,
     tray,
@@ -458,6 +499,7 @@ export function App() {
       const moving = project.palettes.filter((p) => ids.includes(p.id));
       if (!moving.length) return;
       const imgIds = new Set(moving.map((p) => p.imageId).filter(Boolean));
+      checkpoint(copy ? "copy" : "move");
       set((s) => ({
         ...s,
         projects: s.projects.map((p) => {
@@ -473,7 +515,7 @@ export function App() {
         }),
       }));
       const what = moving.length === 1 ? `"${moving[0].name}"` : `${moving.length} palettes`;
-      toast(`${copy ? "Copied" : "Moved"} ${what} to ${target.name}`);
+      toast(`${copy ? "Copied" : "Moved"} ${what} to ${target.name}`, true);
     },
     genFull,
     setGenFull,
@@ -504,10 +546,14 @@ export function App() {
   };
   const commitRename = () => {
     const name = renameText.trim();
-    if (renaming && name) set((s) => ({ ...s, projects: s.projects.map((p) => (p.id === renaming ? { ...p, name } : p)) }));
+    if (renaming && name && name !== state.projects.find((p) => p.id === renaming)?.name) {
+      checkpoint("rename");
+      set((s) => ({ ...s, projects: s.projects.map((p) => (p.id === renaming ? { ...p, name } : p)) }));
+    }
     setRenaming(null);
   };
   const deleteProject = (id: string) => {
+    checkpoint("delete project");
     set((s) => {
       const projects = s.projects.filter((p) => p.id !== id);
       if (!projects.length) {
@@ -517,7 +563,7 @@ export function App() {
       const { [id]: _gone, ...gen } = s.gen;
       return { ...s, projects, gen, current: s.current === id ? projects[0].id : s.current };
     });
-    toast("Project deleted");
+    toast("Project deleted", true);
   };
 
   const collapsed = state.collapsed ?? [];
@@ -533,9 +579,9 @@ export function App() {
         <div className="seg" role="group" aria-label="View">
           {(
             [
-              ["palettes", "Palettes"],
-              ["refs", "Project references"],
-              ["explore", "Explore"],
+              ["palettes", "Color Palettes"],
+              ["refs", "Image Sampling"],
+              ["explore", "Keywords"],
             ] as [View, string][]
           ).map(([v, label]) => (
             <button key={v} type="button" aria-pressed={!editingPalette && view === v} onClick={() => ctx.go(v)}>
@@ -666,6 +712,9 @@ export function App() {
                       set((s) => ({ ...s, current: p.id }));
                       setTray([]);
                       setConvertState(null);
+                      setTextTest(null);
+                      setGenFull(false);
+                      setView("palettes");
                     }}
                     onDoubleClick={() => {
                       setRenaming(p.id);
@@ -773,7 +822,7 @@ export function App() {
               ctx={ctx}
               colors={textTest.colors}
               name={textTest.name}
-              backLabel={textTest.back === "gen" ? "Palette" : textTest.back === "refs" ? "Project references" : textTest.back === "explore" ? "Explore" : "Palettes"}
+              backLabel={textTest.back === "gen" ? "Palette" : textTest.back === "refs" ? "Image Sampling" : textTest.back === "explore" ? "Keywords" : "Color Palettes"}
               onBack={() => {
                 setView(textTest.back === "text" ? "palettes" : textTest.back);
                 setTextTest(null);
@@ -816,7 +865,19 @@ export function App() {
       )}
       {toastMsg && (
         <div className="toast" role="status">
-          {toastMsg}
+          {toastMsg.text}
+          {toastMsg.undo && (
+            <button
+              type="button"
+              className="toast-undo"
+              onClick={() => {
+                setToastMsg(null);
+                undo();
+              }}
+            >
+              Undo
+            </button>
+          )}
         </div>
       )}
       {cursorNote && (

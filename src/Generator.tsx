@@ -7,7 +7,7 @@ import {
   confusedPairs, simulate, VISIONS, type Adjust, type RGB, type Rule, type Vision,
 } from "./color";
 import {
-  IconArrowLeft, IconCopy, IconText, IconWheel, IconEye, IconFocus, IconGray, IconLock, IconMinus, IconPlus, IconReset, IconShuffle, IconSliders, IconSwatches, IconUnlock, IconX,
+  IconArrowLeft, IconCopy, IconText, IconWheel, IconEye, IconFocus, IconGray, IconLock, IconMinus, IconPlus, IconReset, IconShuffle, IconSliders, IconSwatches, IconUnlock, IconX, IconArtwork,
 } from "./icons";
 import { copyText } from "./References";
 import { useWindowFullscreen } from "./platform";
@@ -44,6 +44,7 @@ export function Generator({ ctx }: { ctx: Ctx }) {
     }
   };
   const [leaving, setLeaving] = useState(false);
+  const [exportAsk, setExportAsk] = useState(false);
   const [picker, setPicker] = useState<{ i: number; left: number; top: number } | null>(null);
   const [adjust, setAdjust] = useState<{ base: string[]; a: Adjust } | null>(null);
   const dirty = !!gen.baseline && !same(gen.colors, gen.baseline);
@@ -223,6 +224,18 @@ export function Generator({ ctx }: { ctx: Ctx }) {
   };
   const saveLabel = editing ? (isPantone ? "Save as RGB palette" : "Save") : "Save palette";
 
+  // Export to Illustrator what's on screen. Unchanged colours of a Pantone palette keep their names.
+  const exportNow = (keepNames: boolean) => {
+    setExportAsk(false);
+    const colors = gen.colors.map((hex, i) => {
+      const c = keepNames && isPantone && editing!.colors[i]?.hex === hex ? editing!.colors[i] : undefined;
+      return c ? { ...c } : { hex };
+    });
+    const kind = colors.some((c) => "pantone" in c && c.pantone) ? "pantone" : "rgb";
+    ctx.exportPalettes([{ id: editing?.id ?? "screen", name: title, kind, created: Date.now(), colors }]);
+  };
+  const exportClick = () => (dirty || !editing ? setExportAsk(true) : exportNow(true));
+
   const title = editing ? editing.name : project.name;
   const similar = confusedPairs(gen.colors, vision);
 
@@ -242,6 +255,9 @@ export function Generator({ ctx }: { ctx: Ctx }) {
       <button type="button" className="btn" title="Convert the colours on screen to Pantone" onClick={() => ctx.convertColors(gen.colors, title)}>
         To Pantone
       </button>
+      <button type="button" className="btn" title="Export the colours on screen to an Illustrator file" onClick={exportClick}>
+        <IconArtwork /> Illustrator
+      </button>
       {editing && !isPantone && (
         <button type="button" className="btn" onClick={() => save(true)}>
           Save copy
@@ -259,7 +275,7 @@ export function Generator({ ctx }: { ctx: Ctx }) {
         <div className="titlebar">
           <div>
             <button type="button" className="back" onClick={() => leave()}>
-              <IconArrowLeft size={16} /> {back === "refs" ? "Project references" : back === "explore" ? "Explore" : "Palettes"}
+              <IconArrowLeft size={16} /> {back === "refs" ? "Image Sampling" : back === "explore" ? "Keywords" : "Color Palettes"}
               <span className="kbd">Esc</span>
             </button>
             <h1>{title}</h1>
@@ -290,6 +306,28 @@ export function Generator({ ctx }: { ctx: Ctx }) {
         </div>
       )}
 
+      {exportAsk && (
+        <div className="flash" role="alertdialog" aria-label="Save before exporting">
+          <span>{editing ? "You changed this palette. Save it before exporting?" : "This palette isn't saved yet. Save it before exporting?"}</span>
+          <div className="tools">
+            <button type="button" className="btn small" onClick={() => setExportAsk(false)}>
+              Cancel
+            </button>
+            <button type="button" className="btn small" onClick={() => exportNow(true)}>
+              Export without saving
+            </button>
+            {editing && !isPantone && (
+              <button type="button" className="btn small" onClick={() => save(true) && exportNow(false)}>
+                Save copy
+              </button>
+            )}
+            <button type="button" className="btn small primary" onClick={() => save(false) && exportNow(!isPantone)}>
+              {saveLabel}
+            </button>
+          </div>
+        </div>
+      )}
+
       <div className="gen-bar">
         {full && <b className="gen-title">{title}</b>}
         {/* Left: what makes colours */}
@@ -306,10 +344,10 @@ export function Generator({ ctx }: { ctx: Ctx }) {
               type="button"
               aria-pressed={gen.fromRefs}
               disabled={!pool.length}
-              title={pool.length ? `${pool.length} colours from all the images in this project's References` : "Add images to this project's References first"}
+              title={pool.length ? `${pool.length} colours from all the images in this project's Image Sampling` : "Add images to this project's Image Sampling first"}
               onClick={() => ctx.setGen({ ...gen, fromRefs: true })}
             >
-              Project references
+              Image Sampling All
             </button>
           </div>
           <div className="counter">
@@ -374,6 +412,7 @@ export function Generator({ ctx }: { ctx: Ctx }) {
             vision={vision}
             onChange={(colors) => change({ ...genRef.current, colors }, "wheel")}
             onLock={(i) => change({ ...genRef.current, locked: genRef.current.locked.map((l, j) => (j === i ? !l : l)) })}
+            onLockAll={(on) => change({ ...genRef.current, locked: genRef.current.colors.map(() => on) })}
           />
         )}
         <div className={`cols${gray ? " gray" : ""}`}>
@@ -409,7 +448,7 @@ export function Generator({ ctx }: { ctx: Ctx }) {
         <p className="note">
           <span className="kbd">Space</span> new colours · <span className="kbd">Ctrl</span>+<span className="kbd">Z</span> undo ·{" "}
           <span className="kbd">G</span> greyscale · <span className="kbd">W</span> colour wheel · <span className="kbd">F</span> full screen ·{" "}
-          <span className="kbd">Esc</span> back. Click a colour to fine-tune it; lock the ones you want to keep. With Project references on, new
+          <span className="kbd">Esc</span> back. Click a colour to fine-tune it; lock the ones you want to keep. With Image Sampling All on, new
           colours come from all the images in this project, following the harmony you chose.
         </p>
       )}
@@ -964,7 +1003,7 @@ function VisionPicker({ vision, onChange }: { vision: Vision; onChange: (v: Visi
  * their points can't be dragged and show a padlock; unlock to move them. With Free, only the
  * dragged point moves.
  */
-function WheelPanel(props: { colors: string[]; locked: boolean[]; rule: Rule; vision: Vision; onChange: (c: string[]) => void; onLock: (i: number) => void }) {
+function WheelPanel(props: { colors: string[]; locked: boolean[]; rule: Rule; vision: Vision; onChange: (c: string[]) => void; onLock: (i: number) => void; onLockAll: (on: boolean) => void }) {
   const { colors, locked, rule, vision, onChange } = props;
   const ref = useRef<HTMLDivElement>(null);
   const [sel, setSel] = useState(0);
@@ -1074,8 +1113,16 @@ function WheelPanel(props: { colors: string[]; locked: boolean[]; rule: Rule; vi
             )}
           </button>
         ))}
-        <button type="button" className="btn small wheel-lock" onClick={() => props.onLock(selI)}>
+      </div>
+      <div className="wheel-locks">
+        <button type="button" className="btn small" onClick={() => props.onLock(selI)}>
           {selLocked ? <IconUnlock size={15} /> : <IconLock size={15} />} {selLocked ? "Unlock" : "Lock"} colour {selI + 1}
+        </button>
+        <button type="button" className="btn small" disabled={locked.every(Boolean)} onClick={() => props.onLockAll(true)}>
+          <IconLock size={15} /> Lock all
+        </button>
+        <button type="button" className="btn small" disabled={!locked.some(Boolean)} onClick={() => props.onLockAll(false)}>
+          <IconUnlock size={15} /> Unlock all
         </button>
       </div>
       <span className="sw-label">
