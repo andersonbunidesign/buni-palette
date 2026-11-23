@@ -3,7 +3,7 @@ import { save } from "@tauri-apps/plugin-dialog";
 import { openPath } from "@tauri-apps/plugin-opener";
 import type { Ctx } from "./App";
 import { paletteTag, type Gradient, type Palette } from "./store";
-import { css, expandStops, sorted } from "./gradient";
+import { blendDrift, css, fewestStops, sorted } from "./gradient";
 import { api, errText } from "./api";
 import { cmykProfileName } from "./color";
 import { IconArtwork, IconX } from "./icons";
@@ -21,6 +21,24 @@ function savedMode(): Mode {
 export function ExportDialog({ ctx, palettes, gradients = [], onClose }: { ctx: Ctx; palettes: Palette[]; gradients?: Gradient[]; onClose: () => void }) {
   const [mode, setMode] = useState<Mode>(savedMode);
   const [busy, setBusy] = useState(false);
+  // Only the stops you set (default), or extra stops so Illustrator's RGB blend matches the app.
+  const [match, setMatchState] = useState(() => {
+    try {
+      return localStorage.getItem("bp.exportMatchBlend") === "1";
+    } catch {
+      return false;
+    }
+  });
+  const setMatch = (v: boolean) => {
+    setMatchState(v);
+    try {
+      localStorage.setItem("bp.exportMatchBlend", v ? "1" : "0");
+    } catch {
+      /* remembered for this visit only */
+    }
+  };
+  const drifting = gradients.filter((g) => blendDrift(g) > 0.02);
+  const extra = gradients.reduce((n, g) => n + fewestStops(g).length - g.stops.length, 0);
   const [error, setError] = useState<string | null>(null);
   const spots = palettes.reduce((n, p) => n + p.colors.filter((c) => c.pantone).length, 0);
   const total = palettes.reduce((n, p) => n + p.colors.length, 0);
@@ -49,7 +67,7 @@ export function ExportDialog({ ctx, palettes, gradients = [], onClose }: { ctx: 
           name: g.name,
           radial: g.type === "radial",
           angle: g.angle,
-          stops: expandStops(g, 6),
+          stops: match ? fewestStops(g) : sorted(g.stops).map(({ hex, pos }) => ({ hex, pos })),
           key: sorted(g.stops).map(({ hex, pos }) => ({ hex, pos })),
         })),
         mode,
@@ -95,10 +113,25 @@ export function ExportDialog({ ctx, palettes, gradients = [], onClose }: { ctx: 
           ))}
         </div>
         {gradients.length > 0 && (
-          <p className="muted">
-            Each gradient becomes a gradient swatch and a filled rectangle with its stops written under it.
-            {gradients.some((g) => g.blend !== "rgb") && " Illustrator blends in RGB or CMYK, so in-between stops are added to keep the smooth blend."}
-          </p>
+          <p className="muted">Each gradient becomes a gradient swatch and a filled rectangle with its stops written under it.</p>
+        )}
+        {drifting.length > 0 && (
+          <div>
+            <h3>Gradient stops</h3>
+            <div className="seg small" role="group" aria-label="Gradient stops">
+              <button type="button" aria-pressed={!match} onClick={() => setMatch(false)}>
+                Only my stops
+              </button>
+              <button type="button" aria-pressed={match} onClick={() => setMatch(true)}>
+                Match the app's blend
+              </button>
+            </div>
+            <p className="sw-label export-help">
+              {match
+                ? `Adds ${extra} in-between ${extra === 1 ? "stop" : "stops"}, only where Illustrator's RGB blend would look different from the app. Easier to see, harder to edit.`
+                : `Exactly the stops you set, easy to edit in Illustrator. Illustrator blends in RGB, so the middle of ${drifting.length === 1 ? `"${drifting[0].name}"` : `${drifting.length} of these`} will look a little duller than in the app.`}
+            </p>
+          </div>
         )}
         {palettes.length > 0 && <p className="muted">
           A square for every colour, with its values, and a swatch group per palette.{" "}

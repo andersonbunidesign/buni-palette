@@ -105,3 +105,9 @@ New repo to create: `andersonbunidesign/buni-palette`.
 - Illustrator: `export_illustrator` takes `gradients` too; each becomes a gradient swatch (group "Gradients") and a
   rectangle with its stops written under it. Perceptual blends are sent with extra in-between stops because
   Illustrator blends in RGB/CMYK. Gradients are process only (no Pantone). Mesh ("blurry blobs") gradients: later.
+
+## 1.2.1
+
+- Illustrator gradients export only the stops you set by default. "Match the app's blend" (shown only when Illustrator's
+  RGB blend would visibly differ) adds the fewest in-between stops needed (`fewestStops`, adaptive halving, OKLab
+  tolerance 0.02). The CSS fallback uses the same.

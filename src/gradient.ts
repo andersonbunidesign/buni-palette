@@ -101,6 +101,41 @@ export function expandStops(g: Pick<GradLike, "stops" | "blend">, perSegment = 6
   return out;
 }
 
+/** How far the app's blend and a plain RGB blend drift apart between two colours (OKLab distance, worst point). */
+function drift(a: string, b: string, blend: Blend): number {
+  let worst = 0;
+  for (let k = 1; k < 8; k++) worst = Math.max(worst, labDist(toLab(mix(a, b, k / 8, blend)), toLab(mix(a, b, k / 8, "rgb"))));
+  return worst;
+}
+
+/** The worst drift across a gradient: under about 0.02 the two blends look the same. */
+export function blendDrift(g: Pick<GradLike, "stops" | "blend">): number {
+  if (g.blend === "rgb") return 0;
+  const s = sorted(g.stops);
+  let worst = 0;
+  for (let i = 1; i < s.length; i++) worst = Math.max(worst, drift(s[i - 1].hex, s[i].hex, g.blend));
+  return worst;
+}
+
+/**
+ * Your stops, plus only the in-between stops needed so an app that blends in RGB (Illustrator) looks like the app:
+ * a segment gets a middle stop only where the blends differ visibly, and its halves are checked again.
+ */
+export function fewestStops(g: Pick<GradLike, "stops" | "blend">, tol = 0.02): GStop[] {
+  const s = sorted(g.stops).map(({ hex, pos }) => ({ hex, pos }));
+  if (g.blend === "rgb") return s;
+  const out: GStop[] = [s[0]];
+  const split = (a: GStop, b: GStop, depth: number) => {
+    if (depth < 3 && drift(a.hex, b.hex, g.blend) > tol) {
+      const m = { hex: mix(a.hex, b.hex, 0.5, g.blend), pos: (a.pos + b.pos) / 2 };
+      split(a, m, depth + 1);
+      split(m, b, depth + 1);
+    } else out.push(b);
+  };
+  for (let i = 1; i < s.length; i++) split(s[i - 1], s[i], 0);
+  return out;
+}
+
 const pct = (p: number) => `${Math.round(p * 1000) / 10}%`;
 const shape = (g: GradLike) => (g.type === "radial" ? "radial-gradient(circle" : `linear-gradient(${Math.round(g.angle)}deg`);
 const space = (b: Blend) => (b === "oklab" ? " in oklab" : b === "oklch" ? " in oklch" : "");
@@ -113,7 +148,7 @@ export function css(g: GradLike): string {
 }
 /** The same gradient written with plain RGB stops, for browsers and apps without "in oklab". */
 export function cssFallback(g: GradLike): string {
-  return `${shape(g)}, ${expandStops(g, 4).map((x) => `${x.hex} ${pct(x.pos)}`).join(", ")})`;
+  return `${shape(g)}, ${fewestStops(g, 0.015).map((x) => `${x.hex} ${pct(x.pos)}`).join(", ")})`;
 }
 export function cssBlock(g: GradLike): string {
   return g.blend === "rgb" ? `background: ${css(g)};` : `background: ${cssFallback(g)};\nbackground: ${css(g)};`;
