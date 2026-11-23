@@ -21,7 +21,7 @@ import { paletteImage } from "./share";
 import { copyText } from "./References";
 
 /** Set from the desktop app when it starts. */
-export let VERSION = "1.1.1";
+export let VERSION = "1.1.2";
 
 export type View = "refs" | "gen" | "palettes" | "text" | "explore";
 

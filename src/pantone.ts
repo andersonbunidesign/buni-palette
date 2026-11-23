@@ -53,3 +53,29 @@ export function matchWord(dE: number): string {
   if (dE < 6) return "Noticeable";
   return "Far";
 }
+
+const norm = (t: string) => t.toLowerCase().replace(/^\s*pantone\s*/, "").replace(/[\s-]+/g, " ").trim();
+
+/**
+ * Finds a Pantone colour by the code you type: "165", "165 C", "PANTONE 165 U", "Cool Gray 9", "9224".
+ * A C or U at the end picks coated or uncoated; otherwise the guides in use come first.
+ * Returns it with its Delta E to `hex`, or null when no guide has that code.
+ */
+export function findCode(query: string, hex: string, preferred: Book[]): Candidate | null {
+  let q = norm(query);
+  if (!q) return null;
+  let suffix: "C" | "U" | null = null;
+  const m = q.match(/^(.*?)\s*([cu])$/);
+  if (m && m[1] && /\d|gray|black|yellow|red|blue|green|violet|purple|pink|orange|magenta|rubine|rhodamine|reflex/.test(m[1])) {
+    q = m[1].trim();
+    suffix = m[2].toUpperCase() as "C" | "U";
+  }
+  const order = [...preferred, ...BOOKS.map((b) => b.id).filter((b) => !preferred.includes(b))];
+  const lab = hexToLab(hex);
+  for (const b of order) {
+    if (suffix && BOOKS.find((x) => x.id === b)!.suffix !== suffix) continue;
+    const hit = load(b).find((p) => norm(p.name.replace(/ [CU]$/, "")) === q);
+    if (hit) return { ...hit, dE: deltaE2000(lab, hit.lab) };
+  }
+  return null;
+}

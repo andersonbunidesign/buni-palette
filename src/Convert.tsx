@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import type { Ctx } from "./App";
 import { Palette, PColor, uid } from "./store";
-import { BOOKS, bookShort, nearest, matchWord, type Book } from "./pantone";
+import { BOOKS, bookShort, findCode, nearest, matchWord, type Book, type Candidate } from "./pantone";
 import { formatValue } from "./color";
 
 /** Besides a Pantone colour, each colour can stay as it is or become plain white or black (process). */
@@ -20,7 +20,25 @@ export function Convert({ ctx, palette, onDone, onCancel }: { ctx: Ctx; palette:
   // The closest match is picked for each colour; picks reset when the guides change.
   // A pick is a Pantone name or one of the other choices.
   const [picks, setPicks] = useState<Record<number, string>>({});
-  const chosen = (i: number) => cands[i].find((c) => c.name === picks[i]) ?? (OTHER.some((o) => o.id === picks[i]) ? null : cands[i][0]);
+  // A Pantone typed in by hand for a colour (any code, from any guide).
+  const [typed, setTyped] = useState<Record<number, Candidate>>({});
+  const [query, setQuery] = useState<Record<number, string>>({});
+  const [notFound, setNotFound] = useState<Record<number, boolean>>({});
+  const chosen = (i: number) =>
+    cands[i].find((c) => c.name === picks[i]) ??
+    (typed[i]?.name === picks[i] ? typed[i] : null) ??
+    (OTHER.some((o) => o.id === picks[i]) ? null : cands[i][0]);
+  const lookUp = (i: number, hex: string) => {
+    const q = (query[i] ?? "").trim();
+    if (!q) return;
+    const hit = findCode(q, hex, books);
+    setNotFound((s) => ({ ...s, [i]: !hit }));
+    if (!hit) return;
+    const inList = cands[i].some((c) => c.name === hit.name);
+    if (!inList) setTyped((s) => ({ ...s, [i]: hit }));
+    setPicks((s) => ({ ...s, [i]: hit.name }));
+    setQuery((s) => ({ ...s, [i]: "" }));
+  };
   const other = (i: number) => (OTHER.find((o) => o.id === picks[i])?.id ?? null) as Other | null;
 
   const toggleBook = (b: Book) => {
@@ -92,11 +110,11 @@ export function Convert({ ctx, palette, onDone, onCancel }: { ctx: Ctx; palette:
                 <span>{formatValue(c.hex, ctx.mode === "hex" ? "rgb" : ctx.mode)}</span>
               </div>
               <div className="cands" role="radiogroup" aria-label={`Pantone options for ${c.hex}`}>
-                {cands[i].map((p) => (
+                {[...cands[i], ...(typed[i] && !cands[i].some((c) => c.name === typed[i].name) ? [typed[i]] : [])].map((p) => (
                   <button
                     key={p.name}
                     type="button"
-                    className="cand"
+                    className={`cand${typed[i]?.name === p.name ? " typed" : ""}`}
                     role="radio"
                     aria-checked={pick?.name === p.name}
                     onClick={() => setPicks((s) => ({ ...s, [i]: p.name }))}
@@ -114,6 +132,29 @@ export function Convert({ ctx, palette, onDone, onCancel }: { ctx: Ctx; palette:
                     </span>
                   </button>
                 ))}
+                <form
+                  className="cand-find"
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    lookUp(i, c.hex);
+                  }}
+                >
+                  <input
+                    id={`find-${i}`}
+                    className={`field${notFound[i] ? " bad" : ""}`}
+                    placeholder="Type a Pantone, e.g. 165 C"
+                    aria-label={`Type a Pantone for colour ${i + 1}`}
+                    value={query[i] ?? ""}
+                    onChange={(e) => {
+                      setQuery((s) => ({ ...s, [i]: e.target.value }));
+                      setNotFound((s) => ({ ...s, [i]: false }));
+                    }}
+                  />
+                  <button type="submit" className="btn small" disabled={!(query[i] ?? "").trim()}>
+                    Use
+                  </button>
+                  {notFound[i] && <span className="find-msg">Not in the guides. Check the number, e.g. 165 C or Cool Gray 9 U.</span>}
+                </form>
                 <div className="cand-others">
                   {OTHER.map((o) => (
                     <button

@@ -65,3 +65,8 @@ New repo to create: `andersonbunidesign/buni-palette`.
   different colours, small areas included, and avoids the last set. Colours can be dragged into a new order (reset by
   Resample or the slider). To Pantone button on each image goes straight to the Pantone screen.
 - Open palette: drag a colour column to move it (Ctrl+Z undoes it); Pantone names follow their colour.
+
+## 1.1.2
+
+- To Pantone: each colour has a "Type a Pantone" field. Any code from any of the four guides ("165", "165 C",
+  "PANTONE 165 U", "Cool Gray 9") is added as a choice with its Delta E and picked.
