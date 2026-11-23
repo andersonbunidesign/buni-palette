@@ -21,9 +21,12 @@ function load(b: Book): PantoneColor[] {
   if (!cache[b]) {
     const suffix = BOOKS.find((x) => x.id === b)!.suffix;
     cache[b] = RAW[b].split(";").map((item) => {
-      const [code, h] = item.split("|");
+      const [code, h, l] = item.split("|");
       const hex = "#" + h.toUpperCase();
-      return { name: `PANTONE ${code} ${suffix}`, hex, lab: hexToLab(hex), book: b };
+      // The guide's own Lab is used for matching: the hex is clipped to what a screen can show,
+      // which matters for neons and other very bright colours.
+      const lab = l ? (l.split(",").map(Number) as Lab) : hexToLab(hex);
+      return { name: `PANTONE ${code} ${suffix}`, hex, lab, book: b };
     });
   }
   return cache[b]!;

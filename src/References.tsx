@@ -1,7 +1,7 @@
 import React, { useRef, useState } from "react";
 import type { Ctx } from "./App";
 import type { RefImage, Palette } from "./store";
-import { nextName, refUrl, uid } from "./store";
+import { nextName, refColors, refUrl, swatchKey, uid } from "./store";
 import { api } from "./api";
 import { extract, sampleAt, type Swatch } from "./extract";
 import { formatValue, readableInk } from "./color";
@@ -92,8 +92,15 @@ export function References({ ctx }: { ctx: Ctx }) {
               r={r}
               traySet={traySet}
               onTray={toggleTray}
-              onSave={() => savePalette([...r.auto, ...r.picked], r.id)}
-              onGen={() => toGenerator([...r.auto, ...r.picked].map((s) => s.hex))}
+              onSave={() => savePalette(refColors(r).map((c) => c.s), r.id)}
+              onGen={() => toGenerator(refColors(r).map((c) => c.s.hex))}
+              onPantone={() =>
+                ctx.convertColors(
+                  refColors(r).map(({ s }) => ({ hex: s.hex, x: s.x, y: s.y })),
+                  nextName(project),
+                  r.id,
+                )
+              }
             />
           ))}
         </div>
@@ -148,6 +155,7 @@ function RefCard(props: {
   onTray: (hex: string) => void;
   onSave: () => void;
   onGen: () => void;
+  onPantone: () => void;
 }) {
   const { ctx, r, traySet, onTray } = props;
   const [hover, setHover] = useState<Swatch | null>(null);
@@ -161,11 +169,21 @@ function RefCard(props: {
 
   // `count` is the number of automatic colours; the slider shows the total with the hand-picked ones,
   // and moving it recalculates only the automatic ones.
-  const reExtract = async (n: number, seed = r.seed ?? 0) => {
+  // New automatic colours go back to the standard order (automatic first, then picked).
+  const reExtract = async (n: number, seed = r.seed ?? 0, previous: string[] = []) => {
     setCount(n);
     const ticket = ++busy.current;
-    const auto = await extract(refUrl(r), n, seed);
-    if (ticket === busy.current) update((x) => ({ ...x, count: n, auto, seed }));
+    const auto = await extract(refUrl(r), n, seed, previous);
+    if (ticket === busy.current) update((x) => ({ ...x, count: n, auto, seed, order: undefined }));
+  };
+  const [dragKey, setDragKey] = useState<string | null>(null);
+  const [dropAt, setDropAt] = useState<{ key: string; after: boolean } | null>(null);
+  const moveSwatch = (from: string, to: string, after: boolean) => {
+    if (from === to) return;
+    const keys = refColors(r).map((c) => swatchKey(c.s)).filter((k) => k !== from);
+    const at = keys.indexOf(to) + (after ? 1 : 0);
+    keys.splice(at, 0, from);
+    update((x) => ({ ...x, order: keys }));
   };
   const total = count + r.picked.length;
   const maxTotal = Math.max(16, r.picked.length + 1);
@@ -188,13 +206,43 @@ function RefCard(props: {
       update((x) => ({ ...x, count: n, auto: x.auto.filter((a) => a !== s) }));
     } else update((x) => ({ ...x, picked: x.picked.filter((p) => p !== s) }));
   };
-  const sw = (s: Swatch, auto: boolean) => (
+  const sw = (s: Swatch, auto: boolean) => {
+    const key = swatchKey(s);
+    return (
     <button
-      key={s.hex + s.x}
+      key={key}
       type="button"
-      className={`sw${traySet.has(s.hex) ? " in-tray" : ""}${auto ? "" : " picked"}`}
+      draggable
+      onDragStart={(e) => {
+        setHover(null);
+        setDragKey(key);
+        e.dataTransfer.setData("application/x-bp-swatch", key);
+        e.dataTransfer.effectAllowed = "move";
+      }}
+      onDragEnd={() => {
+        setDragKey(null);
+        setDropAt(null);
+      }}
+      onDragOver={(e) => {
+        if (!dragKey || dragKey === key) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = "move";
+        const b = e.currentTarget.getBoundingClientRect();
+        const after = e.clientX > b.left + b.width / 2;
+        if (dropAt?.key !== key || dropAt.after !== after) setDropAt({ key, after });
+      }}
+      onDrop={(e) => {
+        e.preventDefault();
+        const b = e.currentTarget.getBoundingClientRect();
+        if (dragKey) moveSwatch(dragKey, key, e.clientX > b.left + b.width / 2);
+        setDragKey(null);
+        setDropAt(null);
+      }}
+      className={`sw${traySet.has(s.hex) ? " in-tray" : ""}${auto ? "" : " picked"}${dragKey === key ? " dragging" : ""}${
+        dropAt?.key === key ? (dropAt.after ? " drop-after" : " drop-before") : ""
+      }`}
       style={{ background: s.hex, color: readableInk(s.hex) }}
-      title={`${formatValue(s.hex, ctx.mode)}${auto ? "" : " (picked by hand)"}: click to collect`}
+      title={`${formatValue(s.hex, ctx.mode)}${auto ? "" : " (picked by hand)"}: click to collect, drag to reorder`}
       onMouseEnter={() => setHover(s)}
       onMouseLeave={() => setHover(null)}
       onFocus={() => setHover(s)}
@@ -214,7 +262,8 @@ function RefCard(props: {
         <IconX size={12} />
       </span>
     </button>
-  );
+    );
+  };
 
   return (
     <article className="ref">
@@ -243,7 +292,8 @@ function RefCard(props: {
         <img src={refUrl(r)} alt={r.name} draggable={false} />
         {/* Where every colour came from shows only while the mouse is on the image. */}
         {showDots &&
-          [...r.auto, ...r.picked]
+          refColors(r)
+            .map((c) => c.s)
             .filter((s) => s.x >= 0 && s !== hover)
             .map((s, i) => <span key={i} className="marker small" style={{ left: `${s.x * 100}%`, top: `${s.y * 100}%`, background: s.hex }} />)}
         {hover && hover.x >= 0 && (
@@ -295,17 +345,14 @@ function RefCard(props: {
             onChange={(e) => reExtract(Math.max(0, Number(e.target.value) - r.picked.length))}
           />
         </div>
-        <div className="chips-sw">
-          {r.auto.map((s) => sw(s, true))}
-          {r.picked.map((s) => sw(s, false))}
-        </div>
+        <div className="chips-sw">{refColors(r).map((c) => sw(c.s, c.auto))}</div>
         <div className="ref-actions">
           <button
             type="button"
             className="btn small"
             title="Find a different set of automatic colours (hand-picked ones stay)"
             disabled={count < 1}
-            onClick={() => reExtract(count, ((r.seed ?? 0) + 1 + Math.floor(Math.random() * 1000)) % 100000)}
+            onClick={() => reExtract(count, ((r.seed ?? 0) + 1 + Math.floor(Math.random() * 1000)) % 100000, r.auto.map((s) => s.hex))}
           >
             <IconReset size={16} /> Resample
           </button>
@@ -314,6 +361,9 @@ function RefCard(props: {
           </button>
           <button type="button" className="btn small" onClick={props.onSave}>
             <IconSwatches size={16} /> Save as palette
+          </button>
+          <button type="button" className="btn small" title="Match these colours to Pantone and save them as a Pantone palette" onClick={props.onPantone}>
+            To Pantone
           </button>
         </div>
       </div>

@@ -177,7 +177,7 @@ export function Generator({ ctx }: { ctx: Ctx }) {
       ctx.updateProject((p) => ({
         ...p,
         palettes: p.palettes.map((x) =>
-          x.id === editing.id ? { ...x, colors: gen.colors.map((hex, i) => (x.colors[i] && x.colors[i].hex === hex ? x.colors[i] : { hex })) } : x,
+          x.id === editing.id ? { ...x, colors: gen.colors.map((hex, i) => (x.colors[i]?.hex === hex ? x.colors[i] : x.colors.find((c) => c.hex === hex) ?? { hex })) } : x,
         ),
       }));
       ctx.setGen({ ...gen, baseline: gen.colors });
@@ -216,10 +216,70 @@ export function Generator({ ctx }: { ctx: Ctx }) {
     change({ ...genRef.current, colors: adjust.base.map((h) => adjustHex(h, a)) }, "adjust");
   };
 
+  // Drag a colour sideways to move it (up and down when the colours are stacked on a narrow window).
+  const colsRef = useRef<HTMLDivElement>(null);
+  const [colDrag, setColDrag] = useState<{ from: number; to: number } | null>(null);
+  const justDragged = useRef(false);
+  const startColDrag = (i: number, e: React.PointerEvent) => {
+    const t = e.target as HTMLElement;
+    if (e.button !== 0 || t.closest("button, input")) return;
+    const el = colsRef.current;
+    if (!el) return;
+    // Stops the browser selecting the colour values while dragging.
+    e.preventDefault();
+    const vertical = getComputedStyle(el).flexDirection.startsWith("column");
+    const centres = Array.from(el.children).map((c) => {
+      const r = c.getBoundingClientRect();
+      return vertical ? r.top + r.height / 2 : r.left + r.width / 2;
+    });
+    const start = vertical ? e.clientY : e.clientX;
+    let active = false;
+    let to = i;
+    const move = (ev: PointerEvent) => {
+      const p = vertical ? ev.clientY : ev.clientX;
+      if (!active && Math.abs(p - start) < 6) return;
+      if (!active) {
+        active = true;
+        window.getSelection()?.removeAllRanges();
+        setPicker(null);
+        setAdjust(null);
+      }
+      to = centres.filter((c, j) => j !== i && c < p).length;
+      setColDrag({ from: i, to });
+    };
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", up);
+      setColDrag(null);
+      if (!active) return;
+      justDragged.current = true;
+      window.setTimeout(() => (justDragged.current = false), 0);
+      if (to === i) return;
+      const g = genRef.current;
+      const reorder = <T,>(a: T[]) => {
+        const b = a.slice();
+        const [x] = b.splice(i, 1);
+        b.splice(to, 0, x);
+        return b;
+      };
+      change({ ...g, colors: reorder(g.colors), locked: reorder(g.locked) });
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", up);
+  };
+  // While dragging, the columns show in their new order.
+  const colOrder = gen.colors.map((_, i) => i);
+  if (colDrag) {
+    const [x] = colOrder.splice(colDrag.from, 1);
+    colOrder.splice(colDrag.to, 0, x);
+  }
+
   const isPantone = editing?.kind === "pantone";
   // In a Pantone palette, a colour that hasn't changed keeps its Pantone name (or White / Black).
   const pantoneOf = (hex: string, i: number) => {
-    const c = isPantone && editing!.colors[i]?.hex === hex ? editing!.colors[i] : undefined;
+    const c = isPantone ? (editing!.colors[i]?.hex === hex ? editing!.colors[i] : editing!.colors.find((x) => x.hex === hex)) : undefined;
     return c ? c.pantone ?? c.label : undefined;
   };
   const saveLabel = editing ? (isPantone ? "Save as RGB palette" : "Save") : "Save palette";
@@ -228,7 +288,7 @@ export function Generator({ ctx }: { ctx: Ctx }) {
   const exportNow = (keepNames: boolean) => {
     setExportAsk(false);
     const colors = gen.colors.map((hex, i) => {
-      const c = keepNames && isPantone && editing!.colors[i]?.hex === hex ? editing!.colors[i] : undefined;
+      const c = keepNames && isPantone ? (editing!.colors[i]?.hex === hex ? editing!.colors[i] : editing!.colors.find((x) => x.hex === hex)) : undefined;
       return c ? { ...c } : { hex };
     });
     const kind = colors.some((c) => "pantone" in c && c.pantone) ? "pantone" : "rgb";
@@ -415,11 +475,13 @@ export function Generator({ ctx }: { ctx: Ctx }) {
             onLockAll={(on) => change({ ...genRef.current, locked: genRef.current.colors.map(() => on) })}
           />
         )}
-        <div className={`cols${gray ? " gray" : ""}`}>
-          {gen.colors.map((hex, i) => (
+        <div ref={colsRef} className={`cols${gray ? " gray" : ""}${colDrag ? " dragging-cols" : ""}`}>
+          {colOrder.map((i) => [gen.colors[i], i] as const).map(([hex, i]) => (
             <Column
               key={i}
               hex={hex}
+              dragging={colDrag?.from === i}
+              onPointerDown={(e) => startColDrag(i, e)}
               shown={simulate(hex, vision)}
               pantone={pantoneOf(hex, i)}
               ctx={ctx}
@@ -427,6 +489,7 @@ export function Generator({ ctx }: { ctx: Ctx }) {
               canRemove={gen.colors.length > 2}
               open={picker?.i === i}
               onOpen={(e) => {
+                if (justDragged.current) return;
                 setAdjust(null);
                 const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
                 setPicker(picker?.i === i ? null : { i, left: Math.max(8, Math.min(window.innerWidth - 300, r.left + r.width / 2 - 146)), top: r.top + 64 });
@@ -448,7 +511,7 @@ export function Generator({ ctx }: { ctx: Ctx }) {
         <p className="note">
           <span className="kbd">Space</span> new colours · <span className="kbd">Ctrl</span>+<span className="kbd">Z</span> undo ·{" "}
           <span className="kbd">G</span> greyscale · <span className="kbd">W</span> colour wheel · <span className="kbd">F</span> full screen ·{" "}
-          <span className="kbd">Esc</span> back. Click a colour to fine-tune it; lock the ones you want to keep. With Image Sampling All on, new
+          <span className="kbd">Esc</span> back. Click a colour to fine-tune it, drag it to change the order; lock the ones you want to keep. With Image Sampling All on, new
           colours come from all the images in this project, following the harmony you chose.
         </p>
       )}
@@ -465,6 +528,8 @@ function Column(props: {
   locked: boolean;
   canRemove: boolean;
   open: boolean;
+  dragging: boolean;
+  onPointerDown: (e: React.PointerEvent) => void;
   onOpen: (e: React.MouseEvent) => void;
   onLock: () => void;
   onSet: (hex: string) => void;
@@ -481,14 +546,15 @@ function Column(props: {
   };
   return (
     <div
-      className={`col${props.open ? " open" : ""}`}
+      className={`col${props.open ? " open" : ""}${props.dragging ? " dragging" : ""}`}
       style={{ background: props.shown, color: ink }}
+      onPointerDown={props.onPointerDown}
       onClick={(e) => {
         const t = e.target as HTMLElement;
         if (t.closest("button, input")) return;
         props.onOpen(e);
       }}
-      title="Click to adjust this colour"
+      title="Click to adjust this colour, drag to move it"
     >
       <div className="col-tools">
         <button type="button" aria-pressed={locked} aria-label={locked ? "Unlock colour" : "Lock colour"} title={locked ? "Unlock" : "Lock"} onClick={props.onLock}>

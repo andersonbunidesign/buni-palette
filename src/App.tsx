@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { AppState, GenState, Palette, Project, RefImage, colorCopy, flushState, migrate, sampleState, saveState, setSaveErrorHandler, uid } from "./store";
+import { AppState, GenState, Palette, Project, RefImage, PColor, colorCopy, flushState, migrate, sampleState, saveState, setSaveErrorHandler, uid } from "./store";
 import { cmykProfileName, generate, setCmykTables } from "./color";
 import type { Book } from "./pantone";
 import { extract, loadImage } from "./extract";
@@ -21,7 +21,7 @@ import { paletteImage } from "./share";
 import { copyText } from "./References";
 
 /** Set from the desktop app when it starts. */
-export let VERSION = "1.1.0";
+export let VERSION = "1.1.1";
 
 export type View = "refs" | "gen" | "palettes" | "text" | "explore";
 
@@ -44,7 +44,7 @@ export interface Ctx {
   setTray: (t: string[]) => void;
   /** Pantone conversion of a saved palette, or of colours on screen in the generator. */
   openConvert: (paletteId: string) => void;
-  convertColors: (colors: string[], name: string) => void;
+  convertColors: (colors: (string | PColor)[], name: string, imageId?: string) => void;
   openCompare: (ids: string[]) => void;
   /** Text on colour test, inside the window. */
   openTextTest: (colors: TextTestColor[], name: string) => void;
@@ -470,9 +470,12 @@ export function App() {
       const pal = project.palettes.find((p) => p.id === id);
       if (pal) setConvertState({ pal, back: view });
     },
-    convertColors: (colors, name) => {
+    convertColors: (colors, name, imageId) => {
       setGenFull(false);
-      setConvertState({ pal: { id: "unsaved", name, kind: "rgb", created: Date.now(), colors: colors.map((hex) => ({ hex })) }, back: view });
+      setConvertState({
+        pal: { id: "unsaved", name, kind: "rgb", created: Date.now(), imageId, colors: colors.map((c) => (typeof c === "string" ? { hex: c } : { ...c })) },
+        back: view,
+      });
     },
     openCompare: (ids) => setCompare(ids.map((id) => project.palettes.find((p) => p.id === id)).filter((p): p is Palette => !!p)),
     openTextTest: (colors, name) => {

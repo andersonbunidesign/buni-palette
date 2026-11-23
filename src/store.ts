@@ -43,8 +43,23 @@ export interface RefImage {
   picked: Swatch[];
   /** Changed by Resample, so the automatic colours come out different. */
   seed?: number;
+  /** The order the colours were dragged into (keys from swatchKey); unset means automatic first, then picked. */
+  order?: string[];
   /** Photos saved from Explore: who took them, for the credit Unsplash asks for. */
   source?: { author: string; authorUrl: string; photoUrl: string; keyword: string };
+}
+
+export const swatchKey = (s: { hex: string; x: number; y: number }) => `${s.hex}@${s.x.toFixed(4)},${s.y.toFixed(4)}`;
+
+/** An image's colours in the order shown: the dragged order if there is one, new colours at the end. */
+export function refColors(r: RefImage): { s: import("./extract").Swatch; auto: boolean }[] {
+  const all = [...r.auto.map((s) => ({ s, auto: true })), ...r.picked.map((s) => ({ s, auto: false }))];
+  if (!r.order?.length) return all;
+  const at = new Map(r.order.map((k, i) => [k, i]));
+  return all
+    .map((c, i) => ({ c, i, o: at.get(swatchKey(c.s)) }))
+    .sort((a, b) => (a.o ?? 1e6 + a.i) - (b.o ?? 1e6 + b.i))
+    .map((x) => x.c);
 }
 
 export const refUrl = (r: RefImage) => imageUrl(r.file);

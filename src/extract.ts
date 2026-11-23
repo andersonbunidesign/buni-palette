@@ -80,27 +80,33 @@ export async function sampleAt(url: string, x: number, y: number): Promise<strin
   return n ? rgbToHex([r / n, g / n, b / n]) : null;
 }
 
+export interface Block { lab: Lab; hex: string; x: number; y: number; share: number }
+
+const BLOCKS = 32;
+const blockCache = new Map<string, Block[]>();
+
 /**
- * The `count` main colours of an image, largest area first. Each colour keeps the
- * position of a pixel that matches it, so the app can show where it came from.
+ * Every distinct colour area of an image, small ones included: about 30 groups found by k-means in Lab,
+ * near-duplicates merged. Each keeps the real pixel closest to its centre, so the colour exists in the image
+ * and the app can show where it came from. Worked out once per image.
  */
-/** The main colours of an image. A different `seed` (Resample) finds a different set. */
-export async function extract(url: string, count: number, seed = 0): Promise<Swatch[]> {
-  if (count < 1) return [];
-  const { data, w, h } = await pixels(url);
-  const pts: { lab: Lab; x: number; y: number }[] = [];
+export async function colorBlocks(url: string): Promise<Block[]> {
+  const hit = blockCache.get(url);
+  if (hit) return hit;
+  const { data, w, h } = await pixels(url, 200);
+  const pts: { lab: Lab; x: number; y: number; i: number }[] = [];
   for (let y = 0; y < h; y++)
     for (let x = 0; x < w; x++) {
       const i = (y * w + x) * 4;
       if (data[i + 3] < 128) continue;
-      pts.push({ lab: rgbToLab([data[i], data[i + 1], data[i + 2]]), x: (x + 0.5) / w, y: (y + 0.5) / h });
+      pts.push({ lab: rgbToLab([data[i], data[i + 1], data[i + 2]]), x: (x + 0.5) / w, y: (y + 0.5) / h, i });
     }
   if (!pts.length) return [];
-  const k = Math.min(count, pts.length);
-  const rand = seeded(pts.length * 7919 + k + seed * 104729);
+  const k = Math.min(BLOCKS, pts.length);
+  const rand = seeded(pts.length * 7919 + k);
   const d2 = (a: Lab, b: Lab) => (a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2 + (a[2] - b[2]) ** 2;
 
-  // k-means++ seeding: spread the starting centres so small accent colours get a chance.
+  // k-means++ seeding spreads the starting centres, so small accent colours get their own group.
   const centres: Lab[] = [pts[Math.floor(rand() * pts.length)].lab];
   const dist = new Float64Array(pts.length).fill(Infinity);
   while (centres.length < k) {
@@ -119,9 +125,8 @@ export async function extract(url: string, count: number, seed = 0): Promise<Swa
     }
     centres.push(pts[pick].lab);
   }
-
   const assign = new Int32Array(pts.length);
-  for (let iter = 0; iter < 14; iter++) {
+  for (let iter = 0; iter < 12; iter++) {
     const sums = centres.map(() => [0, 0, 0, 0]);
     for (let i = 0; i < pts.length; i++) {
       let best = 0, bd = Infinity;
@@ -138,9 +143,8 @@ export async function extract(url: string, count: number, seed = 0): Promise<Swa
       if (s[3]) centres[i] = [s[0] / s[3], s[1] / s[3], s[2] / s[3]];
     });
   }
-
-  // Each centre becomes the real pixel closest to it, so the colour exists in the image.
-  const result: Swatch[] = centres.map((c, ci) => {
+  const raw: Block[] = [];
+  centres.forEach((c, ci) => {
     let best = -1, bd = Infinity, n = 0;
     for (let i = 0; i < pts.length; i++) {
       if (assign[i] !== ci) continue;
@@ -148,17 +152,64 @@ export async function extract(url: string, count: number, seed = 0): Promise<Swa
       const d = d2(pts[i].lab, c);
       if (d < bd) { bd = d; best = i; }
     }
-    if (best < 0) return null as unknown as Swatch;
+    if (best < 0) return;
     const p = pts[best];
-    const i = (Math.min(h - 1, Math.floor(p.y * h)) * w + Math.min(w - 1, Math.floor(p.x * w))) * 4;
-    return { hex: rgbToHex([data[i], data[i + 1], data[i + 2]]), x: p.x, y: p.y, share: n / pts.length };
-  }).filter(Boolean);
-
-  // Drop near-duplicates, then largest first.
-  const unique: Swatch[] = [];
-  for (const s of result.sort((a, b) => (b.share ?? 0) - (a.share ?? 0))) {
-    const lab = rgbToLab(hexToRgb(s.hex)!);
-    if (!unique.some((u) => deltaE2000(lab, rgbToLab(hexToRgb(u.hex)!)) < 2.5)) unique.push(s);
+    const rgb: [number, number, number] = [data[p.i], data[p.i + 1], data[p.i + 2]];
+    raw.push({ lab: rgbToLab(rgb), hex: rgbToHex(rgb), x: p.x, y: p.y, share: n / pts.length });
+  });
+  // Merge groups that look the same (the bigger one absorbs the smaller), and drop specks.
+  raw.sort((a, b) => b.share - a.share);
+  const blocks: Block[] = [];
+  for (const b of raw) {
+    const twin = blocks.find((u) => deltaE2000(u.lab, b.lab) < 3);
+    if (twin) twin.share += b.share;
+    else if (b.share >= 0.0015) blocks.push({ ...b });
   }
-  return unique;
+  if (blockCache.size > 100) blockCache.clear();
+  blockCache.set(url, blocks);
+  return blocks;
+}
+
+/**
+ * The main colours of an image. The first time (seed 0) it takes the biggest areas, each one clearly
+ * different from the others. Resample (seed > 0) draws a different set from all the image's colour blocks,
+ * small ones included, still clearly different from each other, and avoids the colours shown before.
+ */
+export async function extract(url: string, count: number, seed = 0, previous: string[] = []): Promise<Swatch[]> {
+  if (count < 1) return [];
+  const blocks = await colorBlocks(url);
+  if (!blocks.length) return [];
+  const n = Math.min(count, blocks.length);
+  const prev = previous.map((h) => rgbToLab(hexToRgb(h) ?? [0, 0, 0]));
+  const wasShown = (b: Block) => prev.some((p) => deltaE2000(p, b.lab) < 6);
+  const rand = seeded(seed * 104729 + 17);
+  const chosen: Block[] = [];
+  const minDist = (b: Block) => (chosen.length ? Math.min(...chosen.map((c) => deltaE2000(c.lab, b.lab))) : 100);
+
+  // Ask for colours at least `gap` apart; loosen the gap only when the image runs out of different ones.
+  for (let gap = 14; chosen.length < n && gap >= 0; gap -= 3) {
+    while (chosen.length < n) {
+      const options = blocks.filter((b) => !chosen.includes(b) && minDist(b) >= gap);
+      if (!options.length) break;
+      let pick: Block;
+      if (seed === 0) {
+        // Biggest area first, then the area that adds the most difference.
+        pick = options.reduce((a, b) => (Math.pow(b.share, 0.5) * (minDist(b) + 10) > Math.pow(a.share, 0.5) * (minDist(a) + 10) ? b : a));
+      } else {
+        // Small areas get a real chance; colours from the last set are much less likely.
+        const weights = options.map((b) => Math.pow(b.share, 0.3) * (wasShown(b) ? 0.15 : 1) * (1 + Math.min(minDist(b), 40) / 20));
+        let r = rand() * weights.reduce((a, b) => a + b, 0);
+        let i = 0;
+        for (; i < options.length - 1; i++) {
+          r -= weights[i];
+          if (r <= 0) break;
+        }
+        pick = options[i];
+      }
+      chosen.push(pick);
+    }
+  }
+  return chosen
+    .sort((a, b) => b.share - a.share)
+    .map((b) => ({ hex: b.hex, x: b.x, y: b.y, share: b.share }));
 }

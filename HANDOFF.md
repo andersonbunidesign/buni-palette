@@ -54,3 +54,14 @@ New repo to create: `andersonbunidesign/buni-palette`.
 - Reference images stored as files in a library folder with thumbnails; clear-cache in settings.
 - Clipboard: Paste screenshot button reads the clipboard directly; Share as image copies in one click.
 - Credit line: "Vibe coded by Anderson Santos · Version X", linking to andersonbunidesign.com.
+
+## 1.1.1
+
+- Pantone guides updated: Solid Coated from an unofficial 2024 list (2,364 colours, metallics and pastels left out,
+  includes the 2000 and 4000 series such as 2024 C); Solid Uncoated and Pastels & Neons from the PANTONE+ 2019 (V3)
+  libraries. Matching uses each guide's own Lab values (D50, adapted to D65), not clipped screen hex.
+  Newer uncoated colours (2023+) have no open data yet. PANTONE 10401–10454 C are left out until it's clear which guide they belong to.
+- Image Sampling: colours come from a map of the image's ~30 colour blocks. Resample draws a different set of clearly
+  different colours, small areas included, and avoids the last set. Colours can be dragged into a new order (reset by
+  Resample or the slider). To Pantone button on each image goes straight to the Pantone screen.
+- Open palette: drag a colour column to move it (Ctrl+Z undoes it); Pantone names follow their colour.

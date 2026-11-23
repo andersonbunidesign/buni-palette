@@ -565,3 +565,13 @@ input, select { font-family: inherit; color: inherit; }
 .pphoto { aspect-ratio: 3 / 2; overflow: hidden; border-radius: 11px 11px 0 0; background: var(--chip); }
 .pphoto img { display: block; width: 100%; height: 100%; object-fit: cover; }
 .pgrid.with-photos .pstrip { border-radius: 0; height: 72px; }
+
+/* ---------- 1.1.1: reordering colours ---------- */
+.chips-sw .sw[draggable="true"] { cursor: grab; }
+.chips-sw .sw.dragging { opacity: 0.35; }
+.chips-sw .sw.drop-before { box-shadow: -5px 0 0 0 var(--amber); }
+.chips-sw .sw.drop-after { box-shadow: 5px 0 0 0 var(--amber); }
+.cols .col { touch-action: none; }
+.cols.dragging-cols, .cols.dragging-cols * { cursor: grabbing !important; user-select: none; }
+.col.dragging { box-shadow: inset 0 0 0 3px var(--amber), 0 10px 30px rgba(0, 0, 0, 0.3); z-index: 2; transform: scale(1.02); }
+@media (prefers-reduced-motion: reduce) { .col.dragging { transform: none; } }
