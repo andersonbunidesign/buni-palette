@@ -111,3 +111,8 @@ New repo to create: `andersonbunidesign/buni-palette`.
 - Illustrator gradients export only the stops you set by default. "Match the app's blend" (shown only when Illustrator's
   RGB blend would visibly differ) adds the fewest in-between stops needed (`fewestStops`, adaptive halving, OKLab
   tolerance 0.02). The CSS fallback uses the same.
+
+## 1.2.2
+
+- Gradient editor picker works on every project in the sidebar, not only the open one, and on gradient minis too
+  (click takes the colour at that point of the gradient).

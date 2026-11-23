@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import { hasProcess, metaOf, withoutPantone, AppState, GenState, Palette, Project, RefImage, PColor, colorCopy, flushState, migrate, sampleState, saveState, setSaveErrorHandler, uid, gradientsOf, gradSig, type Gradient, type GradState } from "./store";
 import { Gradients } from "./Gradients";
 import { GradientEditor, newGrad } from "./GradientEditor";
-import { cssBlock, css as gradCss } from "./gradient";
+import { colorAt, cssBlock, css as gradCss } from "./gradient";
 import { gradientImage } from "./share";
 import { cmykProfileName, generate, setCmykTables } from "./color";
 import type { Book } from "./pantone";
@@ -25,7 +25,7 @@ import { paletteImage } from "./share";
 import { copyText } from "./References";
 
 /** Set from the desktop app when it starts. */
-export let VERSION = "1.2.1";
+export let VERSION = "1.2.2";
 
 export type View = "refs" | "gen" | "palettes" | "text" | "explore" | "grads" | "gedit";
 
@@ -932,7 +932,8 @@ export function App() {
               const closed = state.closedSections ?? [];
               const toggle = (key: string) => set((s) => { const c = s.closedSections ?? []; return { ...s, closedSections: c.includes(key) ? c.filter((x) => x !== key) : [...c, key] }; });
               // While a gradient is being edited, colours in the palettes below are picked one by one.
-              const picking = view === "gedit" && p.id === project.id;
+              // Every project's palettes and gradients work as a picker, not only this project's.
+              const picking = view === "gedit";
               const section = (key: string, label: string, count: number, body: React.ReactNode) => (
                 <div key={key} className="side-sec">
                   <button type="button" className="sec-head" aria-expanded={!closed.includes(key)} onClick={() => toggle(key)}>
@@ -989,18 +990,23 @@ export function App() {
                       `${p.id}:g`,
                       "Gradients",
                       grads.length,
-                      <div className="minis">
+                      <div className={`minis${picking ? " picking" : ""}`}>
                         {grads.map((g) => (
                           <button
                             key={g.id}
                             type="button"
                             className={`mini gmini${p.id === project.id && ((focusGrad === g.id && view === "grads") || (view === "gedit" && ctx.grad.editing === g.id)) ? " on" : ""}`}
                             style={{ background: gradCss({ ...g, type: "linear", angle: 90 }) }}
-                            title={g.name}
+                            title={picking ? `${g.name}: click to put the colour at that point in the selected stop` : g.name}
                             aria-label={`${g.name} in ${p.name}`}
                             onContextMenu={(e) => ctx.contextMenu(e, gradientActions(g, p.id))}
-                            onDoubleClick={() => openGradientIn(p.id, g.id)}
-                            onClick={() => {
+                            onDoubleClick={() => !picking && openGradientIn(p.id, g.id)}
+                            onClick={(e) => {
+                              if (picking) {
+                                const r = e.currentTarget.getBoundingClientRect();
+                                stopPick.current?.(colorAt(g, Math.min(1, Math.max(0, (e.clientX - r.left) / r.width))));
+                                return;
+                              }
                               set((s) => ({ ...s, current: p.id }));
                               setConvertState(null);
                               setTextTest(null);

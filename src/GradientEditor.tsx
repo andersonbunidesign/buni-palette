@@ -484,7 +484,7 @@ export function GradientEditor({ ctx }: { ctx: Ctx }) {
       )}
 
       <p className="note">
-        <IconPipette size={14} /> Click a colour in a palette in the sidebar to put it in the selected stop (now stop {sel + 1}
+        <IconPipette size={14} /> Click a colour in any palette or gradient in the sidebar, from any project, to put it in the selected stop (now stop {sel + 1}
         {cur ? `, ${cur.hex}` : ""}). <span className="kbd">Space</span> new colours for the unlocked stops · <span className="kbd">L</span> lock ·{" "}
         <span className="kbd">←</span> <span className="kbd">→</span> select a stop · <span className="kbd">Ctrl</span>+<span className="kbd">Z</span> undo ·{" "}
         <span className="kbd">Esc</span> back. Perceptual blends keep the middle from going grey; CSS uses the same blend, and Illustrator gets extra stops so it
