@@ -31,3 +31,9 @@ Everything lives in `Buni Palette` in your user folder: `palettes.json` (project
   can't be driven, the script is saved next to where the file should go, to run with File > Scripts > Other Script.
 
 Vibe coded by Anderson Santos · [andersonbunidesign.com](https://andersonbunidesign.com)
+
+## Blender add-on
+
+`blender/buni_palette_blender.py` puts a palette into Blender's Shader Editor as a frame with one RGB node per colour.
+Install it in Blender under Edit > Preferences > Add-ons > Install from Disk, then use the Buni Palette tab in the
+Shader Editor sidebar (N).
