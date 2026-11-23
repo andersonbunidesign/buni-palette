@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import type { Ctx } from "./App";
 import { Palette, PColor, uid } from "./store";
 import { BOOKS, bookShort, findCode, nearest, matchWord, type Book, type Candidate } from "./pantone";
+import { PantoneGuideDialog } from "./PantoneGuide";
 import { formatValue } from "./color";
 
 /** Besides a Pantone colour, each colour can stay as it is or become plain white or black (process). */
@@ -16,12 +17,33 @@ import { IconCheck } from "./icons";
 /** Pick a Pantone colour for each colour of a palette; the result is a new, separate palette. */
 export function Convert({ ctx, palette, onDone, onCancel }: { ctx: Ctx; palette: Palette; onDone: () => void; onCancel: () => void }) {
   const books = ctx.state.books;
-  const cands = useMemo(() => palette.colors.map((c) => nearest(c.hex, books, 5)), [palette, books]);
+  // A colour that already is Pantone (or White / Black) is matched from the colour it was before.
+  const base = (c: PColor) => ((c.pantone || c.label) && c.orig ? c.orig : c.hex);
+  const cands = useMemo(() => palette.colors.map((c) => nearest(base(c), books, 5)), [palette, books]); // eslint-disable-line react-hooks/exhaustive-deps
   // The closest match is picked for each colour; picks reset when the guides change.
   // A pick is a Pantone name or one of the other choices.
-  const [picks, setPicks] = useState<Record<number, string>>({});
+  // Colours that already are Pantone, White or Black start with that choice.
+  const initialPicks = () => {
+    const out: Record<number, string> = {};
+    palette.colors.forEach((c, i) => {
+      if (c.pantone) out[i] = c.pantone;
+      else if (c.label === "White") out[i] = "white";
+      else if (c.label === "Black") out[i] = "black";
+    });
+    return out;
+  };
+  const [picks, setPicks] = useState<Record<number, string>>(initialPicks);
   // A Pantone typed in by hand for a colour (any code, from any guide).
-  const [typed, setTyped] = useState<Record<number, Candidate>>({});
+  // Colours that are already Pantone keep it, shown as a choice of their own.
+  const [typed, setTyped] = useState<Record<number, Candidate>>(() => {
+    const out: Record<number, Candidate> = {};
+    palette.colors.forEach((c, i) => {
+      const hit = c.pantone ? findCode(c.pantone, base(c), c.book ? [c.book] : books) : null;
+      if (hit) out[i] = hit;
+    });
+    return out;
+  });
+  const [guideFor, setGuideFor] = useState<number | null>(null);
   const [query, setQuery] = useState<Record<number, string>>({});
   const [notFound, setNotFound] = useState<Record<number, boolean>>({});
   const chosen = (i: number) =>
@@ -48,7 +70,7 @@ export function Convert({ ctx, palette, onDone, onCancel }: { ctx: Ctx; palette:
       return;
     }
     ctx.setBooks(BOOKS.map((x) => x.id).filter((id) => next.includes(id)));
-    setPicks({});
+    setPicks(initialPicks());
   };
 
   const save = () => {
@@ -60,10 +82,12 @@ export function Convert({ ctx, palette, onDone, onCancel }: { ctx: Ctx; palette:
       imageId: palette.imageId,
       colors: palette.colors.map((c, i): PColor => {
         const p = chosen(i);
-        if (p) return { hex: p.hex, pantone: p.name, book: p.book, x: c.x, y: c.y };
+        // The colour before it became Pantone is kept, so it can go back to it later.
+        const orig = c.pantone || c.label ? c.orig : c.hex;
+        if (p) return { hex: p.hex, pantone: p.name, book: p.book, orig, x: c.x, y: c.y };
         const o = other(i);
-        if (o === "white") return { hex: "#FFFFFF", label: "White", x: c.x, y: c.y };
-        if (o === "black") return { hex: "#000000", label: "Black", x: c.x, y: c.y };
+        if (o === "white") return { hex: "#FFFFFF", label: "White", orig, x: c.x, y: c.y };
+        if (o === "black") return { hex: "#000000", label: "Black", orig, x: c.x, y: c.y };
         return { hex: c.hex, x: c.x, y: c.y };
       }),
     };
@@ -105,7 +129,7 @@ export function Convert({ ctx, palette, onDone, onCancel }: { ctx: Ctx; palette:
           return (
             <div key={i} className="conv-row">
               <div className="conv-src">
-                <div className="block" style={{ background: c.hex }} />
+                <div className="block" style={{ background: base(c) }} />
                 <b className="num">{c.pantone ? c.pantone.replace(/^PANTONE /, "") : c.label ?? c.hex}</b>
                 <span>{formatValue(c.hex, ctx.mode === "hex" ? "rgb" : ctx.mode)}</span>
               </div>
@@ -120,7 +144,7 @@ export function Convert({ ctx, palette, onDone, onCancel }: { ctx: Ctx; palette:
                     onClick={() => setPicks((s) => ({ ...s, [i]: p.name }))}
                   >
                     <span className="pair" title="Top: your colour. Bottom: the Pantone colour.">
-                      <i style={{ background: c.hex }} />
+                      <i style={{ background: base(c) }} />
                       <i style={{ background: p.hex }} />
                     </span>
                     <span className="meta">
@@ -136,7 +160,7 @@ export function Convert({ ctx, palette, onDone, onCancel }: { ctx: Ctx; palette:
                   className="cand-find"
                   onSubmit={(e) => {
                     e.preventDefault();
-                    lookUp(i, c.hex);
+                    lookUp(i, base(c));
                   }}
                 >
                   <input
@@ -154,6 +178,9 @@ export function Convert({ ctx, palette, onDone, onCancel }: { ctx: Ctx; palette:
                     Use
                   </button>
                   {notFound[i] && <span className="find-msg">Not in the guides. Check the number, e.g. 165 C or Cool Gray 9 U.</span>}
+                  <button type="button" className="btn small" onClick={() => setGuideFor(i)} title="See the whole Pantone guide, by hue">
+                    Browse guide
+                  </button>
                 </form>
                 <div className="cand-others">
                   {OTHER.map((o) => (
@@ -167,7 +194,7 @@ export function Convert({ ctx, palette, onDone, onCancel }: { ctx: Ctx; palette:
                       onClick={() => setPicks((s) => ({ ...s, [i]: o.id }))}
                     >
                       <span className="pair">
-                        <i style={{ background: c.hex }} />
+                        <i style={{ background: base(c) }} />
                         <i style={{ background: o.id === "white" ? "#FFFFFF" : o.id === "black" ? "#000000" : c.hex }} />
                       </span>
                       <span className="meta">
@@ -191,6 +218,18 @@ export function Convert({ ctx, palette, onDone, onCancel }: { ctx: Ctx; palette:
           Create Pantone palette
         </button>
       </div>
+      {guideFor !== null && palette.colors[guideFor] && (
+        <PantoneGuideDialog
+          hex={base(palette.colors[guideFor])}
+          books={books}
+          onClose={() => setGuideFor(null)}
+          onPick={(hit) => {
+            const i = guideFor;
+            if (!cands[i].some((c) => c.name === hit.name)) setTyped((s) => ({ ...s, [i]: hit }));
+            setPicks((s) => ({ ...s, [i]: hit.name }));
+          }}
+        />
+      )}
     </>
   );
 }

@@ -46,7 +46,7 @@ export function Compare({ ctx, palettes, onClose }: { ctx: Ctx; palettes: Palett
                 {label(c)}
               </i>
             ))}
-            <span className={`band-name${p.kind === "pantone" ? " pms" : ""}`}>{p.name}</span>
+            <span className={`band-name${p.colors.some((c) => c.pantone) ? " pms" : ""}`}>{p.name}</span>
           </div>
         ))}
       </div>

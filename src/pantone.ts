@@ -79,3 +79,8 @@ export function findCode(query: string, hex: string, preferred: Book[]): Candida
   }
   return null;
 }
+
+/** Every colour of a guide. */
+export function guideColors(b: Book): PantoneColor[] {
+  return load(b);
+}

@@ -33,7 +33,7 @@ export async function paletteImage(p: Palette): Promise<Blob> {
   ctx.textBaseline = "alphabetic";
   fit(ctx, p.name, W - pad * 2 - 260, "600", 30, UI);
   ctx.fillText(p.name, pad, pad + 30);
-  if (p.kind === "pantone") {
+  if (p.colors.some((c) => c.pantone)) {
     const tag = paletteTag(p);
     const tx = pad + ctx.measureText(p.name).width + 16;
     ctx.font = `700 13px ${UI}`;

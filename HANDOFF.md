@@ -70,3 +70,14 @@ New repo to create: `andersonbunidesign/buni-palette`.
 
 - To Pantone: each colour has a "Type a Pantone" field. Any code from any of the four guides ("165", "165 C",
   "PANTONE 165 U", "Cool Gray 9") is added as a choice with its Delta E and picked.
+
+## 1.1.3
+
+- Pantone guide window: every colour of the chosen guides as swatches, by hue family (light to dark), neutrals last;
+  your colour pinned, the five closest numbered, search by number. Opens from "Browse guide" in To Pantone and from
+  the colour box. The colour box has a Pantone tab with the closest swatches.
+- Pantone colours inside a palette: picking a Pantone in the generator makes that colour a Pantone (locked). Adjust
+  leaves Pantone, White and Black alone; changing the colour by hand makes it a plain colour again (with a notice;
+  Ctrl+Z undoes). "Make process colour" (colour box) and "Remove Pantone" (palette menu) go back to the colour it
+  was before (PColor.orig). Palettes can mix Pantone and process; tag "PANTONE C + n process". To Pantone keeps
+  colours that already are Pantone.

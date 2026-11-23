@@ -75,7 +75,7 @@ export function ExportDialog({ ctx, palettes, onClose }: { ctx: Ctx; palettes: P
                 ))}
               </span>
               <span className="export-name">{p.name}</span>
-              {p.kind === "pantone" && <span className="badge pms">{paletteTag(p)}</span>}
+              {p.colors.some((c) => c.pantone) && <span className="badge pms">{paletteTag(p)}</span>}
             </div>
           ))}
         </div>

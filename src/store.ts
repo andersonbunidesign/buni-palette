@@ -14,6 +14,8 @@ export interface PColor {
   book?: Book;
   /** "White" or "Black" chosen instead of a Pantone colour: printed as process, exactly 0/0/0/0 or 0/0/0/100. */
   label?: "White" | "Black";
+  /** For a Pantone, White or Black colour: the colour it was before, to go back to. */
+  orig?: string;
   /** Where the colour was picked in the source image (0–1). */
   x?: number;
   y?: number;
@@ -84,7 +86,58 @@ export interface GenState {
   baseline?: string[];
   /** Where Back (and Esc) goes. */
   from?: "refs" | "palettes" | "explore";
+  /** Pantone (or White / Black) details of each colour, by position; empty for plain colours. */
+  meta?: (ColorMeta | null)[];
+  baselineMeta?: (ColorMeta | null)[];
 }
+
+/** What makes a colour more than its hex: a Pantone name, or White / Black, and the colour it was before. */
+export interface ColorMeta {
+  hex: string;
+  pantone?: string;
+  book?: Book;
+  label?: "White" | "Black";
+  orig?: string;
+}
+
+export const metaOf = (c: PColor): ColorMeta | null =>
+  c.pantone || c.label ? { hex: c.hex, pantone: c.pantone, book: c.book, label: c.label, orig: c.orig } : null;
+
+/**
+ * Lines the details up with the colours after a change. A detail stays with its colour when the colour moves;
+ * a colour that changed loses it (it's no longer that Pantone).
+ */
+export function alignMeta(colors: string[], meta?: (ColorMeta | null)[]): (ColorMeta | null)[] {
+  if (!meta?.some(Boolean)) return colors.map(() => null);
+  const pool = meta.filter((m): m is ColorMeta => !!m);
+  const used = new Set<ColorMeta>();
+  const out = colors.map((h, i) => {
+    const same = meta[i];
+    if (same && same.hex === h && !used.has(same)) {
+      used.add(same);
+      return same;
+    }
+    return null;
+  });
+  return out.map((m, i) => {
+    if (m) return m;
+    const hit = pool.find((x) => !used.has(x) && x.hex === colors[i]);
+    if (hit) used.add(hit);
+    return hit ?? null;
+  });
+}
+
+/** A palette is a Pantone palette when any colour is Pantone, White or Black. */
+export const kindOf = (colors: PColor[]): Palette["kind"] => (colors.some((c) => c.pantone || c.label) ? "pantone" : "rgb");
+export const hasPantone = (p: Palette) => p.colors.some((c) => c.pantone);
+/** Colours To Pantone still has to match. */
+export const hasProcess = (p: Palette) => p.colors.some((c) => !c.pantone && !c.label);
+/** Turns every Pantone (and White / Black) colour back into the colour it was before. */
+export const withoutPantone = (p: Palette): Palette => ({
+  ...p,
+  kind: "rgb",
+  colors: p.colors.map((c) => (c.pantone || c.label ? { hex: c.orig ?? c.hex, x: c.x, y: c.y } : c)),
+});
 
 export interface AppState {
   projects: Project[];

@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import type { Ctx } from "./App";
-import { Palette, colorCopy, colorLabel, paletteTag, thumbUrl } from "./store";
+import { hasPantone, hasProcess, Palette, colorCopy, colorLabel, paletteTag, thumbUrl } from "./store";
 import { IconArtwork, IconDots, IconFocus, IconTrash, IconPlus } from "./icons";
 import { copyText } from "./References";
 
@@ -91,7 +91,7 @@ export function Palettes({ ctx }: { ctx: Ctx }) {
         <div className="tools">
           {sel.length > 0 && (
             <div className="sel-tools">
-              {single && single.kind === "rgb" && (
+              {single && hasProcess(single) && (
                 <button type="button" className="btn" onClick={() => ctx.openConvert(single.id)}>
                   To Pantone
                 </button>
@@ -251,7 +251,7 @@ export function Palettes({ ctx }: { ctx: Ctx }) {
                       )}
                     </span>
                   )}
-                  {p.kind === "pantone" && (
+                  {hasPantone(p) && (
                     <span className="badge pms">{paletteTag(p)}</span>
                   )}
                   <div className="spacer" />

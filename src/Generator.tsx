@@ -1,7 +1,9 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { Ctx } from "./App";
-import type { GenState, Palette } from "./store";
-import { nextName, uid } from "./store";
+import type { ColorMeta, GenState, Palette, PColor } from "./store";
+import { alignMeta, kindOf, nextName, uid } from "./store";
+import { PantoneGuideDialog, PantoneMini } from "./PantoneGuide";
+import type { Candidate } from "./pantone";
 import {
   NO_ADJUST, RULES, adjustHex, cmykToRgb, formatValue, generate, hexToRgb, hsbToRgb, normHex, parseValue, readableInk, rgbToCmyk, rgbToHex, rgbToHsb, shades,
   confusedPairs, simulate, VISIONS, type Adjust, type RGB, type Rule, type Vision,
@@ -18,7 +20,9 @@ export function newGen(): GenState {
 }
 
 const same = (a?: string[], b?: string[]) => !!a && !!b && a.join() === b.join();
-type Snap = { colors: string[]; locked: boolean[] };
+type Snap = { colors: string[]; locked: boolean[]; meta?: (ColorMeta | null)[] };
+const metaSig = (m?: (ColorMeta | null)[]) => (m ?? []).map((x) => (x ? x.pantone ?? x.label ?? "" : "")).join("|");
+const metaName = (m?: ColorMeta | null) => (m ? (m.pantone ? m.pantone.replace(/^PANTONE /, "") : m.label) : undefined);
 
 export function Generator({ ctx }: { ctx: Ctx }) {
   const { gen, project, genFull: full, setGenFull: setFull } = ctx;
@@ -46,8 +50,10 @@ export function Generator({ ctx }: { ctx: Ctx }) {
   const [leaving, setLeaving] = useState(false);
   const [exportAsk, setExportAsk] = useState(false);
   const [picker, setPicker] = useState<{ i: number; left: number; top: number } | null>(null);
-  const [adjust, setAdjust] = useState<{ base: string[]; a: Adjust } | null>(null);
-  const dirty = !!gen.baseline && !same(gen.colors, gen.baseline);
+  const [adjust, setAdjust] = useState<{ base: string[]; fixed: boolean[]; a: Adjust } | null>(null);
+  const [guideFor, setGuideFor] = useState<number | null>(null);
+  const meta = alignMeta(gen.colors, gen.meta);
+  const dirty = !!gen.baseline && (!same(gen.colors, gen.baseline) || metaSig(meta) !== metaSig(alignMeta(gen.baseline, gen.baselineMeta)));
   const back = gen.from ?? "palettes";
 
   // Undo and redo (Ctrl+Z, Ctrl+Y). Quick runs of changes, like dragging a slider, count as one step.
@@ -58,8 +64,9 @@ export function Generator({ ctx }: { ctx: Ctx }) {
   const change = (next: GenState, key = "") => {
     const now = Date.now();
     const cur = genRef.current;
+    next = { ...next, meta: alignMeta(next.colors, next.meta ?? cur.meta) };
     if (!(key && key === lastPush.current.key && now - lastPush.current.t < 1200)) {
-      undo.current.push({ colors: cur.colors, locked: cur.locked });
+      undo.current.push({ colors: cur.colors, locked: cur.locked, meta: cur.meta });
       if (undo.current.length > 100) undo.current.shift();
     }
     lastPush.current = { key, t: now };
@@ -72,7 +79,7 @@ export function Generator({ ctx }: { ctx: Ctx }) {
     const snap = from.current.pop();
     if (!snap) return;
     const cur = genRef.current;
-    to.current.push({ colors: cur.colors, locked: cur.locked });
+    to.current.push({ colors: cur.colors, locked: cur.locked, meta: cur.meta });
     lastPush.current = { key: "", t: 0 };
     setAdjust(null);
     ctx.setGen({ ...cur, ...snap });
@@ -93,18 +100,18 @@ export function Generator({ ctx }: { ctx: Ctx }) {
   const exit = () => {
     setLeaving(false);
     setFull(false);
-    ctx.setGen({ ...genRef.current, editing: undefined, baseline: undefined, from: undefined });
+    ctx.setGen({ ...genRef.current, editing: undefined, baseline: undefined, baselineMeta: undefined, from: undefined });
     ctx.go(back);
   };
   const leave = () => (dirty ? setLeaving(true) : exit());
   const discard = () => {
     // Put the palette back the way it was, so the next visit starts clean.
-    if (gen.baseline) ctx.setGen({ ...genRef.current, colors: gen.baseline, locked: gen.baseline.map(() => true) });
+    if (gen.baseline) ctx.setGen({ ...genRef.current, colors: gen.baseline, meta: gen.baselineMeta, locked: gen.baseline.map(() => true) });
     exit();
   };
   const revert = () => {
     if (!gen.baseline) return;
-    change({ ...genRef.current, colors: gen.baseline, locked: gen.baseline.map(() => true) });
+    change({ ...genRef.current, colors: gen.baseline, meta: gen.baselineMeta, locked: gen.baseline.map(() => true) });
     ctx.toast("Back to the saved colours. Ctrl+Z brings your changes back.");
   };
 
@@ -172,48 +179,74 @@ export function Generator({ ctx }: { ctx: Ctx }) {
     }
   };
 
+  // The colours as saved: Pantone, White and Black keep their names; others keep where they came from in the image.
+  const asPColors = (prev?: PColor[]): PColor[] =>
+    gen.colors.map((hex, i) => {
+      const m = meta[i];
+      const old = prev ? (prev[i]?.hex === hex ? prev[i] : prev.find((c) => c.hex === hex)) : undefined;
+      if (m) return { hex, pantone: m.pantone, book: m.book, label: m.label, orig: m.orig, x: old?.x, y: old?.y };
+      return old && !old.pantone && !old.label ? old : { hex, x: old?.x, y: old?.y };
+    });
+
   const save = (asNew: boolean) => {
-    if (editing && !asNew && editing.kind === "rgb") {
-      ctx.updateProject((p) => ({
-        ...p,
-        palettes: p.palettes.map((x) =>
-          x.id === editing.id ? { ...x, colors: gen.colors.map((hex, i) => (x.colors[i]?.hex === hex ? x.colors[i] : x.colors.find((c) => c.hex === hex) ?? { hex })) } : x,
-        ),
-      }));
-      ctx.setGen({ ...gen, baseline: gen.colors });
+    if (editing && !asNew) {
+      const colors = asPColors(editing.colors);
+      ctx.updateProject((p) => ({ ...p, palettes: p.palettes.map((x) => (x.id === editing.id ? { ...x, colors, kind: kindOf(colors) } : x)) }));
+      ctx.setGen({ ...gen, meta, baseline: gen.colors, baselineMeta: meta });
       ctx.toast(`Saved "${editing.name}"`);
       return true;
     }
     const name = editing ? `${editing.name} copy` : nextName(project);
-    const pal: Palette = { id: uid(), name, kind: "rgb", created: Date.now(), colors: gen.colors.map((hex) => ({ hex })) };
+    const colors = asPColors(editing?.colors);
+    const pal: Palette = { id: uid(), name, kind: kindOf(colors), created: Date.now(), imageId: editing?.imageId, colors };
     ctx.updateProject((p) => {
       const i = editing ? p.palettes.findIndex((x) => x.id === editing.id) : -1;
       return { ...p, palettes: i >= 0 ? [...p.palettes.slice(0, i + 1), pal, ...p.palettes.slice(i + 1)] : [...p.palettes, pal] };
     });
-    if (editing) {
-      // The copy is saved; the original stays as it was and you keep working on the copy.
-      ctx.setGen({ ...gen, editing: pal.id, baseline: gen.colors });
-      ctx.toast(`Saved a copy: "${name}". The original is unchanged.`);
-    } else {
-      ctx.setGen({ ...gen, editing: pal.id, baseline: gen.colors });
-      ctx.toast(`Saved "${name}" to Palettes`);
-    }
+    ctx.setGen({ ...gen, meta, editing: pal.id, baseline: gen.colors, baselineMeta: meta });
+    // A copy is saved; the original stays as it was and you keep working on the copy.
+    ctx.toast(editing ? `Saved a copy: "${name}". The original is unchanged.` : `Saved "${name}" to Palettes`);
     return true;
   };
 
   const setColor = (i: number, hex: string, key = "") => {
     const g = genRef.current;
+    // Changing a Pantone colour by hand makes it a plain colour again.
+    const was = alignMeta(g.colors, g.meta)[i];
+    if (was && was.hex !== hex) ctx.toast(`No longer ${metaName(was)}. Ctrl+Z brings it back.`);
     change({ ...g, colors: g.colors.map((c, j) => (j === i ? hex : c)), locked: g.locked.map((l, j) => (j === i ? true : l)) }, key);
+  };
+
+  // Picking from the Pantone guide: the colour becomes that Pantone and is locked.
+  const setPantone = (i: number, c: Candidate) => {
+    const g = genRef.current;
+    const m = alignMeta(g.colors, g.meta);
+    const orig = m[i] ? m[i]!.orig : g.colors[i];
+    const nextMeta = m.slice();
+    nextMeta[i] = { hex: c.hex, pantone: c.name, book: c.book, orig };
+    change({ ...g, colors: g.colors.map((h, j) => (j === i ? c.hex : h)), meta: nextMeta, locked: g.locked.map((l, j) => (j === i ? true : l)) });
+  };
+  // Back to a plain colour: the colour it was before it became Pantone, unlocked.
+  const toProcess = (i: number) => {
+    const g = genRef.current;
+    const m = alignMeta(g.colors, g.meta);
+    if (!m[i]) return;
+    const hex = m[i]!.orig ?? g.colors[i];
+    const nextMeta = m.slice();
+    nextMeta[i] = null;
+    change({ ...g, colors: g.colors.map((h, j) => (j === i ? hex : h)), meta: nextMeta, locked: g.locked.map((l, j) => (j === i ? false : l)) });
+    ctx.toast(`${metaName(m[i])} is a plain colour again`);
   };
 
   const openAdjust = () => {
     setPicker(null);
-    setAdjust(adjust ? null : { base: gen.colors.slice(), a: NO_ADJUST });
+    // Pantone, White and Black colours are left as they are: adjusting them would change the ink.
+    setAdjust(adjust ? null : { base: gen.colors.slice(), fixed: meta.map(Boolean), a: NO_ADJUST });
   };
   const applyAdjust = (a: Adjust) => {
     if (!adjust) return;
     setAdjust({ ...adjust, a });
-    change({ ...genRef.current, colors: adjust.base.map((h) => adjustHex(h, a)) }, "adjust");
+    change({ ...genRef.current, colors: adjust.base.map((h, i) => (adjust.fixed[i] ? h : adjustHex(h, a))) }, "adjust");
   };
 
   // Drag a colour sideways to move it (up and down when the colours are stacked on a narrow window).
@@ -276,25 +309,16 @@ export function Generator({ ctx }: { ctx: Ctx }) {
     colOrder.splice(colDrag.to, 0, x);
   }
 
-  const isPantone = editing?.kind === "pantone";
-  // In a Pantone palette, a colour that hasn't changed keeps its Pantone name (or White / Black).
-  const pantoneOf = (hex: string, i: number) => {
-    const c = isPantone ? (editing!.colors[i]?.hex === hex ? editing!.colors[i] : editing!.colors.find((x) => x.hex === hex)) : undefined;
-    return c ? c.pantone ?? c.label : undefined;
-  };
-  const saveLabel = editing ? (isPantone ? "Save as RGB palette" : "Save") : "Save palette";
+  const pantoneOf = (_hex: string, i: number) => metaName(meta[i]);
+  const saveLabel = editing ? "Save" : "Save palette";
 
-  // Export to Illustrator what's on screen. Unchanged colours of a Pantone palette keep their names.
-  const exportNow = (keepNames: boolean) => {
+  // Export to Illustrator what's on screen: Pantone colours as spot colours, the rest as process.
+  const exportNow = (_keepNames?: boolean) => {
     setExportAsk(false);
-    const colors = gen.colors.map((hex, i) => {
-      const c = keepNames && isPantone ? (editing!.colors[i]?.hex === hex ? editing!.colors[i] : editing!.colors.find((x) => x.hex === hex)) : undefined;
-      return c ? { ...c } : { hex };
-    });
-    const kind = colors.some((c) => "pantone" in c && c.pantone) ? "pantone" : "rgb";
-    ctx.exportPalettes([{ id: editing?.id ?? "screen", name: title, kind, created: Date.now(), colors }]);
+    const colors = asPColors(editing?.colors);
+    ctx.exportPalettes([{ id: editing?.id ?? "screen", name: title, kind: kindOf(colors), created: Date.now(), colors }]);
   };
-  const exportClick = () => (dirty || !editing ? setExportAsk(true) : exportNow(true));
+  const exportClick = () => (dirty || !editing ? setExportAsk(true) : exportNow());
 
   const title = editing ? editing.name : project.name;
   const similar = confusedPairs(gen.colors, vision);
@@ -312,13 +336,13 @@ export function Generator({ ctx }: { ctx: Ctx }) {
           </button>
         </>
       )}
-      <button type="button" className="btn" title="Convert the colours on screen to Pantone" onClick={() => ctx.convertColors(gen.colors, title)}>
+      <button type="button" className="btn" title="Convert the colours on screen to Pantone" onClick={() => ctx.convertColors(asPColors(editing?.colors), title, editing?.imageId)}>
         To Pantone
       </button>
       <button type="button" className="btn" title="Export the colours on screen to an Illustrator file" onClick={exportClick}>
         <IconArtwork /> Illustrator
       </button>
-      {editing && !isPantone && (
+      {editing && (
         <button type="button" className="btn" onClick={() => save(true)}>
           Save copy
         </button>
@@ -354,7 +378,7 @@ export function Generator({ ctx }: { ctx: Ctx }) {
             <button type="button" className="btn small danger" onClick={discard}>
               Discard
             </button>
-            {editing && !isPantone && (
+            {editing && (
               <button type="button" className="btn small" onClick={() => save(true) && exit()}>
                 Save copy
               </button>
@@ -376,12 +400,12 @@ export function Generator({ ctx }: { ctx: Ctx }) {
             <button type="button" className="btn small" onClick={() => exportNow(true)}>
               Export without saving
             </button>
-            {editing && !isPantone && (
-              <button type="button" className="btn small" onClick={() => save(true) && exportNow(false)}>
+            {editing && (
+              <button type="button" className="btn small" onClick={() => save(true) && exportNow()}>
                 Save copy
               </button>
             )}
-            <button type="button" className="btn small primary" onClick={() => save(false) && exportNow(!isPantone)}>
+            <button type="button" className="btn small primary" onClick={() => save(false) && exportNow()}>
               {saveLabel}
             </button>
           </div>
@@ -505,7 +529,26 @@ export function Generator({ ctx }: { ctx: Ctx }) {
         </div>
       </div>
       {picker && gen.colors[picker.i] && (
-        <ColorPopover ctx={ctx} hex={gen.colors[picker.i]} left={picker.left} top={picker.top} onSet={(h) => setColor(picker.i, h, `pick-${picker.i}`)} onClose={() => setPicker(null)} />
+        <ColorPopover
+          ctx={ctx}
+          hex={gen.colors[picker.i]}
+          left={picker.left}
+          top={picker.top}
+          onSet={(h) => setColor(picker.i, h, `pick-${picker.i}`)}
+          onClose={() => setPicker(null)}
+          pantone={meta[picker.i]}
+          onPantone={(c) => setPantone(picker.i, c)}
+          onProcess={() => toProcess(picker.i)}
+          onOpenGuide={() => setGuideFor(picker.i)}
+        />
+      )}
+      {guideFor !== null && gen.colors[guideFor] && (
+        <PantoneGuideDialog
+          hex={meta[guideFor]?.orig ?? gen.colors[guideFor]}
+          books={ctx.state.books}
+          onClose={() => setGuideFor(null)}
+          onPick={(c) => setPantone(guideFor, c)}
+        />
       )}
       {!full && (
         <p className="note">
@@ -675,18 +718,19 @@ function useDrag(onPos: (x: number, y: number) => void) {
   return { ref, handlers };
 }
 
-type Tab = "hsb" | "rgb" | "cmyk" | "square" | "disc";
+type Tab = "hsb" | "rgb" | "cmyk" | "square" | "disc" | "pantone";
 const TABS: { id: Tab; label: string }[] = [
   { id: "hsb", label: "HSB" },
   { id: "rgb", label: "RGB" },
   { id: "cmyk", label: "CMYK" },
   { id: "square", label: "Square" },
   { id: "disc", label: "Disc" },
+  { id: "pantone", label: "Pantone" },
 ];
 function savedTab(): Tab {
   try {
     const t = localStorage.getItem("bp.pickerTab");
-    if (t === "hsb" || t === "rgb" || t === "cmyk" || t === "square" || t === "disc") return t;
+    if (t === "hsb" || t === "rgb" || t === "cmyk" || t === "square" || t === "disc" || t === "pantone") return t;
   } catch {
     /* no storage here */
   }
@@ -697,9 +741,25 @@ function savedTab(): Tab {
  * The full colour box (HSB, RGB, CMYK, Square, Disc, shades). Clicks on elements matching
  * `keepOpen` (the thing that opened it) don't close it.
  */
-export function ColorPopover({ ctx, hex, left, top, onSet, onClose, keepOpen = ".col" }: { ctx: Ctx; hex: string; left: number; top: number; onSet: (h: string) => void; onClose: () => void; keepOpen?: string }) {
+export function ColorPopover(props: {
+  ctx: Ctx;
+  hex: string;
+  left: number;
+  top: number;
+  onSet: (h: string) => void;
+  onClose: () => void;
+  keepOpen?: string;
+  /** With these, the box gets a Pantone tab and shows when the colour is a Pantone. */
+  pantone?: ColorMeta | null;
+  onPantone?: (c: Candidate) => void;
+  onProcess?: () => void;
+  onOpenGuide?: () => void;
+}) {
+  const { ctx, hex, left, top, onSet, onClose, keepOpen = ".col", pantone, onPantone, onProcess, onOpenGuide } = props;
   const ref = useRef<HTMLDivElement>(null);
-  const [tab, setTabState] = useState<Tab>(savedTab);
+  const [tabState, setTabState] = useState<Tab>(savedTab);
+  const tab: Tab = tabState === "pantone" && !onPantone ? "hsb" : tabState;
+  const tabs = TABS.filter((t) => t.id !== "pantone" || onPantone);
   const setTab = (t: Tab) => {
     setTabState(t);
     try {
@@ -811,8 +871,21 @@ export function ColorPopover({ ctx, hex, left, top, onSet, onClose, keepOpen = "
           <IconX size={16} />
         </button>
       </div>
+      {pantone && (
+        <div className="pop-pms">
+          <span>
+            <b>{metaName(pantone)}</b>
+            {pantone.pantone ? " · spot colour" : " · process"}
+          </span>
+          {onProcess && (
+            <button type="button" className="link" title="Make it a plain colour again: the colour it was before" onClick={onProcess}>
+              Make process colour
+            </button>
+          )}
+        </div>
+      )}
       <div className="seg small tabs" role="tablist" aria-label="Picker">
-        {TABS.map((t) => (
+        {tabs.map((t) => (
           <button key={t.id} type="button" role="tab" aria-selected={tab === t.id} aria-pressed={tab === t.id} onClick={() => setTab(t.id)}>
             {t.label}
           </button>
@@ -904,12 +977,18 @@ export function ColorPopover({ ctx, hex, left, top, onSet, onClose, keepOpen = "
         </>
       )}
 
-      <span className="label">Shades</span>
-      <div className="shades">
-        {shades(hex).map((c, i) => (
-          <button key={i} type="button" style={{ background: c }} title={c} aria-label={`Use ${c}`} onClick={() => emit(c)} />
-        ))}
-      </div>
+      {tab === "pantone" && onPantone && (
+        <PantoneMini hex={pantone?.orig ?? hex} books={ctx.state.books} onPick={onPantone} onOpenGuide={() => onOpenGuide?.()} />
+      )}
+
+      {tab !== "pantone" && <span className="label">Shades</span>}
+      {tab !== "pantone" && (
+        <div className="shades">
+          {shades(hex).map((c, i) => (
+            <button key={i} type="button" style={{ background: c }} title={c} aria-label={`Use ${c}`} onClick={() => emit(c)} />
+          ))}
+        </div>
+      )}
     </div>
   );
 }

@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { AppState, GenState, Palette, Project, RefImage, PColor, colorCopy, flushState, migrate, sampleState, saveState, setSaveErrorHandler, uid } from "./store";
+import { hasProcess, metaOf, withoutPantone, AppState, GenState, Palette, Project, RefImage, PColor, colorCopy, flushState, migrate, sampleState, saveState, setSaveErrorHandler, uid } from "./store";
 import { cmykProfileName, generate, setCmykTables } from "./color";
 import type { Book } from "./pantone";
 import { extract, loadImage } from "./extract";
@@ -21,7 +21,7 @@ import { paletteImage } from "./share";
 import { copyText } from "./References";
 
 /** Set from the desktop app when it starts. */
-export let VERSION = "1.1.2";
+export let VERSION = "1.1.3";
 
 export type View = "refs" | "gen" | "palettes" | "text" | "explore";
 
@@ -388,13 +388,24 @@ export function App() {
       { label: "Open full screen", onClick: () => { inProject(projectId); openIn(projectId, p.id, true); } },
     ];
     if (extra?.rename) items.push({ label: "Rename", onClick: extra.rename });
-    if (p.kind === "rgb")
+    if (hasProcess(p))
       items.push({ label: "To Pantone", onClick: () => { inProject(projectId); setGenFull(false); setTextTest(null); setConvertState({ pal: p, back: "palettes" }); setView("palettes"); } });
     items.push(
       { label: "Text on colour", onClick: () => { inProject(projectId); setGenFull(false); setTextTest({ colors: p.colors, name: p.name, back: "palettes" }); setView("text"); } },
       { label: "Copy values", onClick: (e) => copyText(p.colors.map((c) => colorCopy(c, state.mode)).join("\n"), e, ctx) },
       { label: "Share as image", onClick: () => sharePalette(p) },
       { label: "Export to Illustrator", onClick: () => setExporting([p]) },
+      ...(p.colors.some((c) => c.pantone || c.label)
+        ? [
+            {
+              label: "Remove Pantone",
+              onClick: () => {
+                set((s) => ({ ...s, projects: s.projects.map((pr) => (pr.id === projectId ? { ...pr, palettes: pr.palettes.map((x) => (x.id === p.id ? withoutPantone(x) : x)) } : pr)) }));
+                toast(`"${p.name}" has plain colours again`);
+              },
+            },
+          ]
+        : []),
       {
         label: "Duplicate",
         onClick: () => {
@@ -431,7 +442,7 @@ export function App() {
     if (!pr || !p) return;
     const colors = p.colors.map((c) => c.hex);
     const g = state.gen[projectId] ?? newGen();
-    set((s) => ({ ...s, current: projectId, gen: { ...s.gen, [projectId]: { ...g, colors, locked: colors.map(() => true), editing: p.id, baseline: colors, from: "palettes" } } }));
+    set((s) => ({ ...s, current: projectId, gen: { ...s.gen, [projectId]: { ...g, colors, meta: p.colors.map(metaOf), baselineMeta: p.colors.map(metaOf), locked: colors.map(() => true), editing: p.id, baseline: colors, from: "palettes" } } }));
     setConvertState(null);
     setTextTest(null);
     setView("gen");
