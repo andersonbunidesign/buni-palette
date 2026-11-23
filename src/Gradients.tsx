@@ -17,6 +17,9 @@ export function Gradients({ ctx }: { ctx: Ctx }) {
   const [renaming, setRenaming] = useState<string | null>(null);
   const [text, setText] = useState("");
   const [suggesting, setSuggesting] = useState(false);
+  // The Compare button in the header compares what's selected here.
+  useEffect(() => ctx.setGridSel(sel), [sel]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => () => ctx.setGridSel([]), []); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (ctx.focusGrad) document.querySelector(`[data-grad="${ctx.focusGrad}"]`)?.scrollIntoView({ block: "nearest" });

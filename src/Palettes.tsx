@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import type { Ctx } from "./App";
 import { hasPantone, hasProcess, Palette, colorCopy, colorLabel, paletteTag, thumbUrl } from "./store";
-import { IconArtwork, IconDots, IconFocus, IconTrash, IconPlus } from "./icons";
+import { IconArtwork, IconDots, IconTrash, IconPlus } from "./icons";
 import { copyText } from "./References";
 
 export function Palettes({ ctx }: { ctx: Ctx }) {
@@ -15,6 +15,9 @@ export function Palettes({ ctx }: { ctx: Ctx }) {
     if (ctx.focusPal) document.querySelector(`[data-pal="${ctx.focusPal}"]`)?.scrollIntoView({ block: "nearest" });
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
   const anchor = useRef<string | null>(null);
+  // The Compare button in the header compares what's selected here.
+  useEffect(() => ctx.setGridSel(sel), [sel]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => () => ctx.setGridSel([]), []); // eslint-disable-line react-hooks/exhaustive-deps
   const [renaming, setRenaming] = useState<string | null>(null);
   const [text, setText] = useState("");
 
@@ -104,9 +107,6 @@ export function Palettes({ ctx }: { ctx: Ctx }) {
               </button>
             </div>
           )}
-          <button type="button" className="btn" disabled={!all.length} onClick={() => ctx.openCompare(sel.length ? sel : all.map((p) => p.id))}>
-            <IconFocus /> {sel.length ? `Compare ${sel.length}` : "Compare all"}
-          </button>
           <button type="button" className="btn primary" onClick={ctx.newPalette}>
             <IconPlus /> New palette
           </button>

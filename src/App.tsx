@@ -8,7 +8,7 @@ import { cmykProfileName, generate, setCmykTables } from "./color";
 import type { Book } from "./pantone";
 import { extract, loadImage } from "./extract";
 import type { ValueMode } from "./color";
-import { IconChevron, IconDots, IconPlus, IconTrash, IconEdit, IconGear, IconMoon, IconSun, Logo } from "./icons";
+import { IconChevron, IconDots, IconFocus, IconPlus, IconTrash, IconEdit, IconGear, IconMoon, IconSun, Logo } from "./icons";
 import { api, errText, setImagesDir, type FmProject } from "./api";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -25,7 +25,7 @@ import { paletteImage } from "./share";
 import { copyText } from "./References";
 
 /** Set from the desktop app when it starts. */
-export let VERSION = "1.2.2";
+export let VERSION = "1.2.3";
 
 export type View = "refs" | "gen" | "palettes" | "text" | "explore" | "grads" | "gedit";
 
@@ -50,6 +50,8 @@ export interface Ctx {
   openConvert: (paletteId: string) => void;
   convertColors: (colors: (string | PColor)[], name: string, imageId?: string) => void;
   openCompare: (ids: string[]) => void;
+  /** What's selected in the Color Palettes or Gradients grid, for the Compare button in the header. */
+  setGridSel: (ids: string[]) => void;
   /** Text on colour test, inside the window. */
   openTextTest: (colors: TextTestColor[], name: string) => void;
   /** Shows the app's own right-click menu. */
@@ -120,7 +122,8 @@ export function App() {
   const [state, setState] = useState<AppState | null>(null);
   const [view, setView] = useState<View>("palettes");
   const [convertState, setConvertState] = useState<{ pal: Palette; back: View } | null>(null);
-  const [compare, setCompare] = useState<Palette[] | null>(null);
+  const [compare, setCompare] = useState<{ palettes: Palette[]; gradients: Gradient[] } | null>(null);
+  const [gridSel, setGridSel] = useState<string[]>([]);
   const [textTest, setTextTest] = useState<{ colors: TextTestColor[]; name: string; back: View } | null>(null);
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; items: MenuItem[] } | null>(null);
   const [exporting, setExporting] = useState<{ palettes: Palette[]; gradients: Gradient[] } | null>(null);
@@ -620,7 +623,8 @@ export function App() {
         back: view,
       });
     },
-    openCompare: (ids) => setCompare(ids.map((id) => project.palettes.find((p) => p.id === id)).filter((p): p is Palette => !!p)),
+    openCompare: (ids) => setCompare({ palettes: ids.map((id) => project.palettes.find((p) => p.id === id)).filter((p): p is Palette => !!p), gradients: [] }),
+    setGridSel,
     openTextTest: (colors, name) => {
       setGenFull(false);
       setConvertState(null);
@@ -721,6 +725,37 @@ export function App() {
     toast("Project deleted", true);
   };
 
+  // Compare in the header: gradients on the Gradients tab, palettes everywhere else; the selection if there is one, else all.
+  const onGradients = view === "grads" || view === "gedit";
+  const gridIds = view === "palettes" || view === "grads" ? gridSel : [];
+  const compareList = onGradients
+    ? (() => { const all = gradientsOf(project); const picked = all.filter((g) => gridIds.includes(g.id)); return picked.length ? picked : all; })()
+    : (() => { const picked = project.palettes.filter((p) => gridIds.includes(p.id)); return picked.length ? picked : project.palettes; })();
+  const compareInfo = {
+    count: compareList.length,
+    label: !compareList.length
+      ? `Nothing to compare in ${project.name} yet`
+      : (() => {
+          const what = onGradients ? "gradient" : "palette";
+          const n = compareList.length;
+          const picked = gridIds.length > 0 && n === gridIds.length;
+          if (n === 1) return picked ? `Compare the selected ${what}` : `Compare the ${what}`;
+          return `Compare ${picked ? `the ${n} selected` : `all ${n}`} ${what}s`;
+        })(),
+  };
+  const openCompareHere = () => {
+    // Read the selection now: it may have changed since this render.
+    const ids = view === "palettes" || view === "grads" ? gridSel : [];
+    if (onGradients) {
+      const all = gradientsOf(project);
+      const picked = all.filter((g) => ids.includes(g.id));
+      setCompare({ palettes: [], gradients: picked.length ? picked : all });
+    } else {
+      const picked = project.palettes.filter((p) => ids.includes(p.id));
+      setCompare({ palettes: picked.length ? picked : project.palettes, gradients: [] });
+    }
+  };
+
   const collapsed = state.collapsed ?? [];
   const editingPalette: Palette | undefined = convertState?.pal;
 
@@ -761,6 +796,16 @@ export function App() {
           <option value="hsb">HSB</option>
           <option value="cmyk" title={cmykProfileName()}>CMYK</option>
         </select>
+        <button
+          type="button"
+          className="round"
+          aria-label={compareInfo.label}
+          title={compareInfo.label}
+          disabled={!compareInfo.count}
+          onClick={openCompareHere}
+        >
+          <IconFocus />
+        </button>
         <button
           type="button"
           className="round"
@@ -1086,7 +1131,7 @@ export function App() {
           onFontsChange={loadFonts}
         />
       )}
-      {compare && <Compare ctx={ctx} palettes={compare} onClose={() => setCompare(null)} />}
+      {compare && <Compare ctx={ctx} palettes={compare.palettes} gradients={compare.gradients} onClose={() => setCompare(null)} />}
       {ctxMenu && <ContextMenu {...ctxMenu} onClose={() => setCtxMenu(null)} />}
       {exporting && <ExportDialog ctx={ctx} palettes={exporting.palettes} gradients={exporting.gradients} onClose={() => setExporting(null)} />}
       {dragging && (

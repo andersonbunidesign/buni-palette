@@ -116,3 +116,9 @@ New repo to create: `andersonbunidesign/buni-palette`.
 
 - Gradient editor picker works on every project in the sidebar, not only the open one, and on gradient minis too
   (click takes the colour at that point of the gradient).
+
+## 1.2.3
+
+- Compare moved to the header (between Values and the theme button). On the Gradients tab (and in the gradient editor)
+  it compares gradients, elsewhere palettes: the grid's selection if there is one, otherwise all of the project.
+  Gradients in Compare all run left to right with their stop values, so they line up.
