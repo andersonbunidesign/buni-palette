@@ -1,6 +1,6 @@
 mod platform;
 
-use bp_core::illustrator::{DocMode, ExportPalette};
+use bp_core::illustrator::{DocMode, ExportGradient, ExportPalette};
 use bp_core::{fontmanager, icc, illustrator, store};
 use serde::{Deserialize, Serialize};
 use std::io::Read as _;
@@ -338,12 +338,12 @@ struct ExportInfo {
 
 /// Writes the palettes to an Illustrator file, built by Illustrator itself.
 #[tauri::command]
-async fn export_illustrator(app: AppHandle, palettes: Vec<ExportPalette>, mode: DocMode, path: String) -> Result<ExportInfo, String> {
+async fn export_illustrator(app: AppHandle, palettes: Vec<ExportPalette>, gradients: Option<Vec<ExportGradient>>, mode: DocMode, path: String) -> Result<ExportInfo, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let data = app.state::<AppData>();
         let (bytes, name, _) = active_profile(&data);
         let conv = icc::Converter::new(&bytes)?;
-        let js = illustrator::script(&palettes, mode, &path, &name, &|rgb| conv.cmyk(rgb))?;
+        let js = illustrator::script(&palettes, &gradients.unwrap_or_default(), mode, &path, &name, &|rgb| conv.cmyk(rgb))?;
         let work = data.paths.work_dir();
         std::fs::create_dir_all(&work).map_err(err("Could not prepare the export"))?;
         let script = work.join("export-palettes.jsx");

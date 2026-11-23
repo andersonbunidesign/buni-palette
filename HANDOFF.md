@@ -81,3 +81,27 @@ New repo to create: `andersonbunidesign/buni-palette`.
   Ctrl+Z undoes). "Make process colour" (colour box) and "Remove Pantone" (palette menu) go back to the colour it
   was before (PColor.orig). Palettes can mix Pantone and process; tag "PANTONE C + n process". To Pantone keeps
   colours that already are Pantone.
+
+## 1.2.0 — Gradients
+
+- Tabs: Color Palettes / Gradients / Image Sampling / Keywords. Each project in the sidebar has two collapsible
+  sections, Palettes and Gradients (`AppState.closedSections`: "<id>:p" / "<id>:g"). Gradients drag between
+  projects like palettes (`application/x-bp-gradients`, Ctrl copies).
+- Data: `Project.gradients?: Gradient[]` (`{id, name, type: linear|radial, angle (CSS), stops [{hex, pos 0–1}], blend:
+  oklab|oklch|rgb, imageId?, line?}`); editor state per project in `AppState.grad`. Default names: project + number,
+  keyword + number from Keywords.
+- `src/gradient.ts`: OKLab/OKLCH blending, `issues()` (dull/grey middle, dark dip, flat stops) and `fixSegment()`
+  (adds a colourful middle stop), `quality()`, `generateGradient()` (modes Smooth / Vibrant / From references /
+  Unusual; 70 candidates scored together with locked stops), `suggest()` (pairs and trios from palette colours),
+  `autoLine()` (best of ~36 lines across an image: ends differ, colour changes smoothly), `stopsAlong()`,
+  `paint()` for exact per-pixel images, CSS with `in oklab` plus an RGB fallback.
+- Editor (`GradientEditor.tsx`): 2–5 stops, drag stops on the bar, locks, Space generates, Ctrl+Z, linear angle dial
+  or radial, blend Perceptual / Vivid / Plain RGB. While it's open, clicking a colour in a sidebar palette puts it in
+  the selected stop. Save / Save copy / Original / Discard, Copy CSS, image, Illustrator.
+- Gradients grid (`Gradients.tsx`) with "Suggest from palettes".
+- Image Sampling and Keywords: Palette (default) / Gradient switch. Gradient mode draws a line automatically; drag its
+  ends or drag across the image to draw your own; "Another line" tries the next best. The gradient takes the line's
+  angle on the image.
+- Illustrator: `export_illustrator` takes `gradients` too; each becomes a gradient swatch (group "Gradients") and a
+  rectangle with its stops written under it. Perceptual blends are sent with extra in-between stops because
+  Illustrator blends in RGB/CMYK. Gradients are process only (no Pantone). Mesh ("blurry blobs") gradients: later.

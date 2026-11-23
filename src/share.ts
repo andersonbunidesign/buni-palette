@@ -1,5 +1,6 @@
 // Draws a palette as a 1200 px wide PNG: name, colours, and under each one hex, RGB and Pantone.
-import type { Palette } from "./store";
+import type { Gradient, Palette } from "./store";
+import { paint, sorted } from "./gradient";
 import { paletteTag } from "./store";
 import { formatValue } from "./color";
 
@@ -99,3 +100,49 @@ function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: numbe
   ctx.closePath();
 }
 
+
+/** Draws a gradient as a 1200 px wide PNG: name, the gradient, and each stop with its value and position. */
+export async function gradientImage(g: Gradient): Promise<Blob> {
+  const W = 1200, pad = 48, boxH = 340, labelH = 64;
+  const H = pad + 44 + 24 + boxH + 16 + labelH + pad;
+  const scale = 2;
+  const c = document.createElement("canvas");
+  c.width = W * scale;
+  c.height = H * scale;
+  const ctx = c.getContext("2d")!;
+  ctx.scale(scale, scale);
+  ctx.fillStyle = "#343434";
+  fit(ctx, g.name, W - pad * 2, "600", 30, UI);
+  ctx.fillText(g.name, pad, pad + 30);
+  const top = pad + 44 + 24;
+  ctx.save();
+  roundRect(ctx, pad, top, W - pad * 2, boxH, 14);
+  ctx.clip();
+  // Drawn at full resolution, so the perceptual blend is exact.
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  paint(ctx, g, pad * scale, top * scale, (W - pad * 2) * scale, boxH * scale);
+  ctx.restore();
+  ctx.setTransform(scale, 0, 0, scale, 0, 0);
+  const stops = sorted(g.stops);
+  const ly = top + boxH + 16;
+  const inner = W - pad * 2;
+  stops.forEach((s, i) => {
+    // Values sit under the stop, kept inside the image at the ends.
+    const x = Math.min(pad + inner - 150, Math.max(pad, pad + s.pos * inner - (i === 0 ? 0 : i === stops.length - 1 ? 150 : 60)));
+    ctx.fillStyle = s.hex;
+    roundRect(ctx, x, ly + 4, 14, 14, 3);
+    ctx.fill();
+    ctx.fillStyle = "#343434";
+    ctx.font = `700 16px ${MONO}`;
+    ctx.fillText(s.hex, x + 22, ly + 17);
+    ctx.fillStyle = "#5E5B57";
+    ctx.font = `400 14px ${MONO}`;
+    ctx.fillText(`${Math.round(s.pos * 100)}%`, x + 22, ly + 39);
+  });
+  ctx.fillStyle = "#A39E97";
+  ctx.font = `500 12px ${UI}`;
+  ctx.textAlign = "right";
+  const what = g.type === "radial" ? "Radial" : `Linear ${Math.round(g.angle)}°`;
+  ctx.fillText(`${what} · ${g.blend === "oklab" ? "perceptual blend" : g.blend === "oklch" ? "vivid blend" : "RGB blend"} · Buni Palette`, W - pad, H - pad + 16);
+  return await new Promise<Blob>((ok, fail) => c.toBlob((b) => (b ? ok(b) : fail(new Error("Couldn't draw the image."))), "image/png"));
+}

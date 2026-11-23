@@ -17,6 +17,8 @@ export interface Settings {
 export interface FmFont { id: string; name: string; family: string; style: string; weight: number; italic: boolean; path: string; index: number }
 export interface FmProject { name: string; fonts: FmFont[] }
 export interface ExportColor { hex: string; pantone?: string; label?: string }
+export interface ExportStop { hex: string; pos: number }
+export interface ExportGradient { name: string; radial: boolean; angle: number; stops: ExportStop[]; key: ExportStop[] }
 
 let imagesDir = "";
 export const setImagesDir = (d: string) => (imagesDir = d);
@@ -40,8 +42,8 @@ export const api = {
   getSettings: () => invoke<Settings>("get_settings"),
   setSettings: (patch: { cmykProfile?: string | null; unsplashKey?: string; fontManager?: boolean }) => invoke<Settings>("set_settings", { patch }),
   cmykLut: () => invoke<Lut>("cmyk_lut"),
-  exportIllustrator: (palettes: { name: string; colors: ExportColor[] }[], mode: "rgb" | "cmyk", path: string) =>
-    invoke<{ path: string }>("export_illustrator", { palettes, mode, path }),
+  exportIllustrator: (palettes: { name: string; colors: ExportColor[] }[], gradients: ExportGradient[], mode: "rgb" | "cmyk", path: string) =>
+    invoke<{ path: string }>("export_illustrator", { palettes, gradients, mode, path }),
   fontManagerProjects: () => invoke<FmProject[] | null>("font_manager_projects"),
   unsplashSearch: (query: string, page: number) => invoke<UnsplashPage>("unsplash_search", { query, page }),
   unsplashImage: (url: string) => invoke<ArrayBuffer>("unsplash_image", { url }),

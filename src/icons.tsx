@@ -97,3 +97,12 @@ export function Logo({ size = 36 }: P) {
   );
 }
 export const IconSearch = (p: P) => <S {...p} sw={2}><circle cx="11" cy="11" r="6.5" /><path d="M16 16l4.5 4.5" /></S>;
+export const IconGradient = (p: P) => (
+  <S {...p}><rect x="3" y="5" width="18" height="14" rx="2" /><path d="M8 5v14M13 5v14M17.5 5v14" strokeOpacity="0.45" /></S>
+);
+export const IconPipette = (p: P) => (
+  <S {...p}><path d="M14.5 4.5l5 5M17 7l-9.5 9.5L5 19l2.5-2.5M12 6.5l5.5 5.5" /><path d="M16.2 3.8a2.3 2.3 0 0 1 3.3 0l.7.7a2.3 2.3 0 0 1 0 3.3l-2.2 2.2-4-4z" /></S>
+);
+export const IconLine = (p: P) => (
+  <S {...p}><circle cx="5.5" cy="18.5" r="2.5" /><circle cx="18.5" cy="5.5" r="2.5" /><path d="M7.5 16.5l9-9" /></S>
+);

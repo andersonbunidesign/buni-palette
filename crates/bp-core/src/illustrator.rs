@@ -22,6 +22,30 @@ pub struct ExportPalette {
     pub colors: Vec<ExportColor>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct ExportStop {
+    pub hex: String,
+    /// 0 to 1 along the gradient.
+    pub pos: f64,
+}
+
+/// A gradient: becomes a gradient swatch and a filled rectangle.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ExportGradient {
+    pub name: String,
+    #[serde(default)]
+    pub radial: bool,
+    /// CSS angle: 0 points up, 90 points right.
+    #[serde(default)]
+    pub angle: f64,
+    /// Stops Illustrator uses. A perceptual blend arrives with extra in-between stops,
+    /// because Illustrator itself blends in RGB or CMYK.
+    pub stops: Vec<ExportStop>,
+    /// The stops the person set, written under the rectangle.
+    #[serde(default)]
+    pub key: Vec<ExportStop>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum DocMode {
@@ -79,9 +103,18 @@ fn r1(v: f64) -> f64 {
 }
 
 /// Builds the script. `cmyk` converts a colour with the CMYK profile chosen in Settings.
-pub fn script(palettes: &[ExportPalette], mode: DocMode, ai_path: &str, profile_name: &str, cmyk: &dyn Fn([u8; 3]) -> [f64; 4]) -> Result<String, String> {
-    if palettes.is_empty() || palettes.iter().all(|p| p.colors.is_empty()) {
-        return Err("Pick at least one palette with colours".into());
+pub fn script(
+    palettes: &[ExportPalette],
+    gradients: &[ExportGradient],
+    mode: DocMode,
+    ai_path: &str,
+    profile_name: &str,
+    cmyk: &dyn Fn([u8; 3]) -> [f64; 4],
+) -> Result<String, String> {
+    let palettes: Vec<&ExportPalette> = palettes.iter().filter(|p| !p.colors.is_empty()).collect();
+    let gradients: Vec<&ExportGradient> = gradients.iter().filter(|g| g.stops.len() >= 2).collect();
+    if palettes.is_empty() && gradients.is_empty() {
+        return Err("Pick at least one palette or gradient".into());
     }
     let mut js = String::new();
     js.push_str("// Made by Buni Palette. Run it in Illustrator: File > Scripts > Other Script.\n");
@@ -92,7 +125,7 @@ pub fn script(palettes: &[ExportPalette], mode: DocMode, ai_path: &str, profile_
         js_str(profile_name)
     ));
     js.push_str("var PALETTES=[\n");
-    for p in palettes {
+    for p in &palettes {
         js.push_str(&format!("{{name:{},colors:[", js_str(&p.name)));
         for c in &p.colors {
             let rgb = parse_hex(&c.hex).ok_or_else(|| format!("\"{}\" isn't a colour", c.hex))?;
@@ -120,6 +153,29 @@ pub fn script(palettes: &[ExportPalette], mode: DocMode, ai_path: &str, profile_
                 c.pantone.as_deref().map(js_str).unwrap_or_else(|| "null".into()),
                 c.label.as_deref().map(js_str).unwrap_or_else(|| "null".into()),
             ));
+        }
+        js.push_str("]},\n");
+    }
+    js.push_str("];\n");
+    let stop = |st: &ExportStop| -> Result<String, String> {
+        let rgb = parse_hex(&st.hex).ok_or_else(|| format!("\"{}\" isn't a colour", st.hex))?;
+        let k = cmyk(rgb).map(|v| v.round());
+        Ok(format!(
+            "{{hex:{},pos:{},rgb:[{},{},{}],cmyk:[{},{},{},{}]}},",
+            js_str(&format!("#{:02X}{:02X}{:02X}", rgb[0], rgb[1], rgb[2])),
+            r1(st.pos.clamp(0.0, 1.0) * 100.0),
+            rgb[0], rgb[1], rgb[2], k[0], k[1], k[2], k[3]
+        ))
+    };
+    js.push_str("var GRADIENTS=[\n");
+    for g in &gradients {
+        js.push_str(&format!("{{name:{},radial:{},angle:{},stops:[", js_str(&g.name), g.radial, r1(g.angle)));
+        for st in &g.stops {
+            js.push_str(&stop(st)?);
+        }
+        js.push_str("],key:[");
+        for st in if g.key.is_empty() { &g.stops } else { &g.key } {
+            js.push_str(&stop(st)?);
         }
         js.push_str("]},\n");
     }
@@ -156,14 +212,17 @@ function main() {
   var widest = 0;
   for (var i = 0; i < PALETTES.length; i++) widest = Math.max(widest, PALETTES[i].colors.length);
   var rowH = TITLE + 12 + SQ + LABEL_H;
-  var W = Math.max(360, MARGIN * 2 + widest * SQ), H = MARGIN * 2 + PALETTES.length * rowH + (PALETTES.length - 1) * GAP;
+  var GW = 360, gRowH = TITLE + 12 + SQ + 28;
+  var rows = PALETTES.length + GRADIENTS.length;
+  var W = Math.max(GW + MARGIN * 2, MARGIN * 2 + widest * SQ);
+  var H = MARGIN * 2 + PALETTES.length * rowH + GRADIENTS.length * gRowH + Math.max(0, rows - 1) * GAP;
   var doc = app.documents.add(MODE == "cmyk" ? DocumentColorSpace.CMYK : DocumentColorSpace.RGB, W, H);
   app.coordinateSystem = CoordinateSystem.DOCUMENTCOORDINATESYSTEM;
   // Start from an empty Swatches panel, so only the palettes are in it.
   try { for (var g = doc.swatchGroups.length - 1; g > 0; g--) doc.swatchGroups[g].remove(); } catch (e) {}
   try { for (var s = doc.swatches.length - 1; s >= 0; s--) { try { doc.swatches[s].remove(); } catch (e) {} } } catch (e) {}
   var ab = doc.artboards[0].artboardRect, L0 = ab[0], T0 = ab[1];
-  doc.artboards[0].name = PALETTES.length == 1 ? PALETTES[0].name : "Palettes";
+  doc.artboards[0].name = rows == 1 ? (PALETTES.length ? PALETTES[0].name : GRADIENTS[0].name) : GRADIENTS.length && !PALETTES.length ? "Gradients" : "Palettes";
   var titleFont = font(["SegoeUI-Semibold", "MyriadPro-Semibold", "Arial-BoldMT", "ArialMT"]);
   var labelFont = font(["SegoeUI", "MyriadPro-Regular", "ArialMT"]);
   var layer = doc.layers[0];
@@ -223,6 +282,54 @@ function main() {
       }
     }
   }
+  var gTop = T0 - MARGIN - PALETTES.length * (rowH + GAP);
+  if (GRADIENTS.length) {
+    var glayer = PALETTES.length ? doc.layers.add() : layer;
+    glayer.name = "Gradients";
+    var ggroup = doc.swatchGroups.add();
+    ggroup.name = "Gradients";
+  }
+  for (var gi = 0; gi < GRADIENTS.length; gi++) {
+    var gd = GRADIENTS[gi];
+    var top2 = gTop - gi * (gRowH + GAP), left2 = L0 + MARGIN;
+    var grad = doc.gradients.add();
+    grad.name = gd.name;
+    grad.type = gd.radial ? GradientType.RADIAL : GradientType.LINEAR;
+    while (grad.gradientStops.length < gd.stops.length) grad.gradientStops.add();
+    for (var si = 0; si < gd.stops.length; si++) {
+      var gs = grad.gradientStops[si];
+      gs.rampPoint = gd.stops[si].pos;
+      gs.midPoint = 50;
+      gs.color = process(gd.stops[si]);
+    }
+    var gcol = new GradientColor();
+    gcol.gradient = grad;
+    try { var gsw = doc.swatches.add(); gsw.name = gd.name; gsw.color = gcol; ggroup.addSwatch(gsw); } catch (e) {}
+    var gart = glayer.groupItems.add();
+    gart.name = gd.name;
+    var gt = gart.textFrames.pointText([left2, top2 - TITLE + 3]);
+    gt.contents = gd.name;
+    gt.textRange.characterAttributes.size = 14;
+    if (titleFont) gt.textRange.characterAttributes.textFont = titleFont;
+    gt.textRange.characterAttributes.fillColor = ink();
+    var gy = top2 - TITLE - 12;
+    var rect = gart.pathItems.rectangle(gy, left2, GW, SQ);
+    rect.stroked = false; rect.filled = true; rect.fillColor = gcol; rect.name = gd.name;
+    // Illustrator's linear gradients run left to right; CSS angles start at the top and turn clockwise.
+    if (!gd.radial && gd.angle != 90) { try { rect.rotate(90 - gd.angle, false, false, true, false, Transformation.CENTER); } catch (e) {} }
+    for (var ki = 0; ki < gd.key.length; ki++) {
+      var ks = gd.key[ki];
+      var kx = left2 + Math.min(GW - 40, Math.max(0, ks.pos / 100 * GW - 20));
+      var lines2 = [ks.hex, Math.round(ks.pos) + "%"];
+      for (var l2 = 0; l2 < lines2.length; l2++) {
+        var kt = gart.textFrames.pointText([kx, gy - SQ - 12 - l2 * 9]);
+        kt.contents = lines2[l2];
+        var ka = kt.textRange.characterAttributes;
+        ka.size = 7; ka.fillColor = ink();
+        if (labelFont) ka.textFont = labelFont;
+      }
+    }
+  }
   var note = layer.textFrames.pointText([L0 + MARGIN, T0 - H + 18]);
   note.contents = "Buni Palette" + (MODE == "cmyk" ? " \u00b7 CMYK values from " + PROFILE : "") + " \u00b7 Pantone values are approximations: check the printed guide";
   note.textRange.characterAttributes.size = 6;
@@ -261,13 +368,39 @@ mod tests {
                 ExportColor { hex: "#B5532E".into(), pantone: None, label: None },
             ],
         }];
-        let js = script(&pals, DocMode::Cmyk, "C:\\out\\a.ai", "Coated FOGRA39", &|_| [10.0, 20.0, 30.0, 40.0]).unwrap();
+        let js = script(&pals, &[], DocMode::Cmyk, "C:\\out\\a.ai", "Coated FOGRA39", &|_| [10.0, 20.0, 30.0, 40.0]).unwrap();
         assert!(js.is_ascii());
         assert!(js.contains("spot:\"PANTONE 5605 C\""));
         assert!(js.contains("cmyk:[0,0,0,0]"), "white is exact");
         assert!(js.contains("cmyk:[10,20,30,40]"));
         assert!(js.contains("\"C:\\\\out\\\\a.ai\""));
         assert!(js.contains("Rye \\u00e9 \\\"1\\\""));
-        assert!(script(&[], DocMode::Rgb, "a.ai", "", &|_| [0.0; 4]).is_err());
+        assert!(script(&[], &[], DocMode::Rgb, "a.ai", "", &|_| [0.0; 4]).is_err());
+    }
+
+    #[test]
+    fn writes_gradients() {
+        let g = ExportGradient {
+            name: "Dusk 1".into(),
+            radial: false,
+            angle: 135.0,
+            stops: vec![
+                ExportStop { hex: "#FF0000".into(), pos: 0.0 },
+                ExportStop { hex: "#AA3355".into(), pos: 0.5 },
+                ExportStop { hex: "#0000FF".into(), pos: 1.0 },
+            ],
+            key: vec![ExportStop { hex: "#FF0000".into(), pos: 0.0 }, ExportStop { hex: "#0000FF".into(), pos: 1.0 }],
+        };
+        let js = script(&[], &[g], DocMode::Rgb, "a.ai", "", &|_| [1.0, 2.0, 3.0, 4.0]).unwrap();
+        assert!(js.contains("var GRADIENTS=["));
+        assert!(js.contains("{name:\"Dusk 1\",radial:false,angle:135,stops:[{hex:\"#FF0000\",pos:0,"));
+        assert!(js.contains("pos:50,rgb:[170,51,85]"));
+        assert!(js.contains("doc.gradients.add()"));
+        if let Ok(out) = std::env::var("BP_DUMP_JSX") {
+            std::fs::write(out, &js).unwrap();
+        }
+        // A gradient with one stop is left out, and nothing else means nothing to export.
+        let one = ExportGradient { name: "x".into(), radial: true, angle: 0.0, stops: vec![ExportStop { hex: "#000000".into(), pos: 0.0 }], key: vec![] };
+        assert!(script(&[], &[one], DocMode::Rgb, "a.ai", "", &|_| [0.0; 4]).is_err());
     }
 }

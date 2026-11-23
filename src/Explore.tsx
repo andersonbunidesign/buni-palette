@@ -3,14 +3,17 @@ import type { Ctx } from "./App";
 import { api, errText, type UnsplashPhoto } from "./api";
 import { extract, type Swatch } from "./extract";
 import { formatValue } from "./color";
-import { nextName, uid, type Palette, type RefImage } from "./store";
+import { nextGradName, nextName, uid, type Gradient, type Palette, type RefImage } from "./store";
+import { autoLine, css, type GStop, type Line } from "./gradient";
 import { IconCheck, IconDots, IconImage, IconMinus, IconPlus, IconSearch, IconSwatches } from "./icons";
-import { copyText } from "./References";
+import { copyText, LineOverlay, ModeSwitch, useSampleMode } from "./References";
 
 interface Result {
   photo: UnsplashPhoto;
   /** Null while the photo is being read. */
   colors: Swatch[] | null;
+  /** Gradient mode: the line the app found and the stops along it; null while reading. */
+  grad?: { line: Line; stops: GStop[]; angle: number; n: number } | null;
   error?: string;
 }
 
@@ -85,6 +88,15 @@ export function Explore({ ctx }: { ctx: Ctx }) {
     }
   };
   const count = search?.count ?? 5;
+  const [mode, setModeState] = useSampleMode("bp.keywordMode");
+  const gradMode = mode === "gradient";
+  const [stopsN, setStopsN] = useState(() => {
+    try {
+      return Math.min(5, Math.max(2, Number(localStorage.getItem("bp.keywordStops")) || 3));
+    } catch {
+      return 3;
+    }
+  });
 
   useEffect(() => {
     api.getSettings().then((s) => setHasKey(!!s.unsplashKey), () => setHasKey(false));
@@ -125,6 +137,38 @@ export function Explore({ ctx }: { ctx: Ctx }) {
     }
   };
 
+  // Gradient mode reads a line off every photo that doesn't have one with this many stops yet.
+  const readGrads = async (list: Result[], n: number) => {
+    await pool(list, 6, async (r) => {
+      try {
+        const g = await autoLine(await photoSrc(r.photo), n);
+        setSearch((s) => (s ? { ...s, results: s.results.map((x) => (x.photo.id === r.photo.id ? { ...x, grad: { ...g, n } } : x)) } : s));
+      } catch (e) {
+        setSearch((s) => (s ? { ...s, results: s.results.map((x) => (x.photo.id === r.photo.id ? { ...x, grad: undefined, error: errText(e) } : x)) } : s));
+      }
+    });
+  };
+  const results0 = search?.results ?? [];
+  useEffect(() => {
+    if (!gradMode) return;
+    const todo = results0.filter((r) => !r.error && r.grad !== null && r.grad?.n !== stopsN);
+    if (!todo.length) return;
+    setSearch((s) => (s ? { ...s, results: s.results.map((x) => (todo.includes(x) ? { ...x, grad: null } : x)) } : s));
+    readGrads(todo, stopsN);
+  }, [gradMode, stopsN, results0.length, search?.query]); // eslint-disable-line react-hooks/exhaustive-deps
+  const setMode = (m: typeof mode) => {
+    setModeState(m);
+    setSel([]);
+  };
+  const setStops = (n: number) => {
+    setStopsN(n);
+    try {
+      localStorage.setItem("bp.keywordStops", String(n));
+    } catch {
+      /* remembered for this visit only */
+    }
+  };
+
   const setCount = (n: number) => {
     setSearch((s) => (s ? { ...s, count: n, results: s.results.map((r) => ({ ...r, colors: r.error ? r.colors : null })) } : s));
     if (searchRef.current) read(searchRef.current.results.filter((r) => !r.error), n);
@@ -135,31 +179,39 @@ export function Explore({ ctx }: { ctx: Ctx }) {
 
   const save = async (ids: string[], projectId: string) => {
     const project = ctx.state.projects.find((p) => p.id === projectId);
-    const list = ids.map(byId).filter((r): r is Result => !!r && !!r.colors && r.colors.length > 0);
+    const list = ids.map(byId).filter((r): r is Result => !!r && (gradMode ? !!r.grad && r.grad.stops.length >= 2 : !!r.colors && r.colors.length > 0));
     if (!project || !list.length || saving) return;
     setSaving(true);
     try {
       const pals: Palette[] = [];
+      const grads: Gradient[] = [];
       const refs: RefImage[] = [];
       const kw = search?.query ?? "Keywords";
       for (const r of list) {
         const p = r.photo;
         const blob = new Blob([await api.unsplashImage(p.urls.regular)]);
         const ref = await ctx.storeImage(blob, kw, {
-          auto: r.colors!,
-          count: r.colors!.length,
+          ...(r.colors?.length ? { auto: r.colors, count: r.colors.length } : {}),
+          ...(r.grad ? { gline: r.grad.line, gstops: r.grad.stops.length } : {}),
           source: { author: p.user.name, authorUrl: p.user.links.html, photoUrl: p.links.html, keyword: kw },
         });
         // Named after the keyword, numbered like other palettes.
+        if (gradMode) {
+          const g = r.grad!;
+          const name = nextGradName({ ...project, gradients: [...(project.gradients ?? []), ...grads] }, kw);
+          grads.push({ id: uid(), name, type: "linear", angle: g.angle, blend: "oklab", created: Date.now(), imageId: ref.id, line: g.line, stops: g.stops.map(({ hex, pos }) => ({ hex, pos })) });
+        } else {
         const name = nextName({ ...project, palettes: [...project.palettes, ...pals] }, kw);
         pals.push({ id: uid(), name, kind: "rgb", created: Date.now(), imageId: ref.id, colors: r.colors!.map((c) => ({ hex: c.hex, x: c.x, y: c.y })) });
+        }
         refs.push(ref);
         api.unsplashTrack(p.links.download_location).catch(() => {});
         if (!savedIn.has(projectId)) savedIn.set(projectId, new Set());
         savedIn.get(projectId)!.add(p.id);
       }
-      ctx.addToProject(projectId, pals, refs);
-      ctx.toast(`Saved ${pals.length === 1 ? `"${pals[0].name}"` : `${pals.length} palettes`} to ${project.name}`);
+      ctx.addToProject(projectId, pals, refs, grads);
+      const made = gradMode ? grads : pals;
+      ctx.toast(`Saved ${made.length === 1 ? `"${made[0].name}"` : `${made.length} ${gradMode ? "gradients" : "palettes"}`} to ${project.name}`);
       bump((n) => n + 1);
     } catch (e) {
       ctx.toast(errText(e));
@@ -178,6 +230,11 @@ export function Explore({ ctx }: { ctx: Ctx }) {
 
   const openInGenerator = (id: string, full: boolean) => {
     const r = byId(id);
+    if (gradMode) {
+      if (!r?.grad) return;
+      ctx.newGradient({ stops: r.grad.stops.map((s) => ({ ...s, locked: true })), blend: "oklab", type: "linear", angle: r.grad.angle, name: search?.query, from: "explore" });
+      return;
+    }
     if (!r?.colors?.length) return;
     const colors = r.colors.map((c) => c.hex).slice(0, 10);
     while (colors.length < 2) colors.push("#BFBFBF");
@@ -220,8 +277,12 @@ export function Explore({ ctx }: { ctx: Ctx }) {
   const menu = (r: Result) => [
     { label: `Save to ${ctx.project.name}`, onClick: () => save(sel.includes(r.photo.id) ? sel : [r.photo.id], ctx.project.id) },
     { label: "Open", onClick: () => openInGenerator(r.photo.id, false) },
-    { label: "Open full screen", onClick: () => openInGenerator(r.photo.id, true) },
-    { label: "Copy values", onClick: (e: React.MouseEvent) => copyText((r.colors ?? []).map((c) => formatValue(c.hex, ctx.mode)).join("\n"), e, ctx) },
+    ...(gradMode ? [] : [{ label: "Open full screen", onClick: () => openInGenerator(r.photo.id, true) }]),
+    {
+      label: "Copy values",
+      onClick: (e: React.MouseEvent) =>
+        copyText((gradMode ? (r.grad?.stops ?? []).map((s) => s.hex) : (r.colors ?? []).map((c) => c.hex)).map((h) => formatValue(h, ctx.mode)).join("\n"), e, ctx),
+    },
     { label: "See the photo on Unsplash", onClick: () => window.document.getElementById(`ph-${r.photo.id}`)?.click() },
   ];
 
@@ -235,12 +296,13 @@ export function Explore({ ctx }: { ctx: Ctx }) {
             Keywords{search ? ` · ${search.total.toLocaleString("en")} photos for "${search.query}"` : ""}
             {sel.length ? ` · ${sel.length} selected` : ""}
           </p>
-          <h1>Find palettes by keyword</h1>
+          <h1>{gradMode ? "Find gradients by keyword" : "Find palettes by keyword"}</h1>
         </div>
         <div className="tools">
+          <ModeSwitch mode={mode} onChange={setMode} />
           {sel.length > 0 && (
             <button type="button" className="btn primary" disabled={saving} onClick={() => save(sel, ctx.project.id)}>
-              <IconSwatches /> {saving ? "Saving…" : `Save ${sel.length} to ${ctx.project.name}`}
+              <IconSwatches /> {saving ? "Saving…" : `Save ${sel.length} ${gradMode ? (sel.length === 1 ? "gradient" : "gradients") : ""} to ${ctx.project.name}`.replace("  ", " ")}
             </button>
           )}
         </div>
@@ -277,16 +339,33 @@ export function Explore({ ctx }: { ctx: Ctx }) {
         >
           <IconImage />
         </button>
-        <span className="label">Colours per photo</span>
-        <div className="counter">
-          <button type="button" className="icon-btn" aria-label="One colour less" disabled={count <= 2} onClick={() => setCount(count - 1)}>
-            <IconMinus size={16} />
-          </button>
-          <b className="num">{count}</b>
-          <button type="button" className="icon-btn" aria-label="One colour more" disabled={count >= 10} onClick={() => setCount(count + 1)}>
-            <IconPlus size={16} />
-          </button>
-        </div>
+        {gradMode ? (
+          <>
+            <span className="label">Stops</span>
+            <div className="counter">
+              <button type="button" className="icon-btn" aria-label="One stop less" disabled={stopsN <= 2} onClick={() => setStops(stopsN - 1)}>
+                <IconMinus size={16} />
+              </button>
+              <b className="num">{stopsN}</b>
+              <button type="button" className="icon-btn" aria-label="One stop more" disabled={stopsN >= 5} onClick={() => setStops(stopsN + 1)}>
+                <IconPlus size={16} />
+              </button>
+            </div>
+          </>
+        ) : (
+          <>
+            <span className="label">Colours per photo</span>
+            <div className="counter">
+              <button type="button" className="icon-btn" aria-label="One colour less" disabled={count <= 2} onClick={() => setCount(count - 1)}>
+                <IconMinus size={16} />
+              </button>
+              <b className="num">{count}</b>
+              <button type="button" className="icon-btn" aria-label="One colour more" disabled={count >= 10} onClick={() => setCount(count + 1)}>
+                <IconPlus size={16} />
+              </button>
+            </div>
+          </>
+        )}
       </form>
 
       {hasKey === false ? (
@@ -308,8 +387,10 @@ export function Explore({ ctx }: { ctx: Ctx }) {
         <div className="empty">
           <b>Search photos by keyword</b>
           <span>
-            Each photo becomes a palette. Select the ones you like and save them to {ctx.project.name}, or drag them onto a project in the sidebar.
-            Saved palettes are named after the keyword and their photo goes into Image Sampling.
+            {gradMode
+              ? "Each photo becomes a gradient, read along a line where its colour changes smoothly. Select the ones you like and save them to "
+              : "Each photo becomes a palette. Select the ones you like and save them to "}
+            {ctx.project.name}, or drag them onto a project in the sidebar. They are named after the keyword and their photo goes into Image Sampling.
           </span>
         </div>
       ) : null}
@@ -335,7 +416,7 @@ export function Explore({ ctx }: { ctx: Ctx }) {
                     }
                     ctx.contextMenu(e, menu(r));
                   }}
-                  draggable={!!r.colors?.length}
+                  draggable={gradMode ? !!r.grad : !!r.colors?.length}
                   onDragStart={(e) => {
                     const ids = sel.includes(id) ? sel : [id];
                     if (!sel.includes(id)) setSel([id]);
@@ -351,8 +432,24 @@ export function Explore({ ctx }: { ctx: Ctx }) {
                   {photos && (
                     <div className="pphoto">
                       <img src={r.photo.urls.small} alt={r.photo.alt_description ?? ""} draggable={false} />
+                      {gradMode && r.grad && <LineOverlay line={r.grad.line} stops={r.grad.stops} />}
                     </div>
                   )}
+                  {gradMode ? (
+                    <>
+                      <div className={`gprev${r.grad ? "" : " loading"}`} style={{ background: r.grad ? css({ type: "linear", angle: 90, blend: "oklab", stops: r.grad.stops }) : undefined }} />
+                      <div className="gvals">
+                        {(r.grad?.stops ?? []).map((s, i) => (
+                          <span key={i}>
+                            <i style={{ background: s.hex }} />
+                            {formatValue(s.hex, ctx.mode)}
+                          </span>
+                        ))}
+                        {r.error && <span className="error-line">{r.error}</span>}
+                      </div>
+                    </>
+                  ) : (
+                  <>
                   <div className="pstrip">
                     {r.colors
                       ? r.colors.map((c, i) => (
@@ -374,6 +471,8 @@ export function Explore({ ctx }: { ctx: Ctx }) {
                     ))}
                     {r.error && <span className="error-line">{r.error}</span>}
                   </div>
+                  </>
+                  )}
                   <div className="pfoot">
                     <span className="pal-name has-img">
                       <span className="pn-text" title={search?.query}>
@@ -381,9 +480,11 @@ export function Explore({ ctx }: { ctx: Ctx }) {
                       </span>
                       <span className="img-pop" aria-hidden="true">
                         <img src={r.photo.urls.small} alt="" />
-                        {(r.colors ?? []).map((c, i) => (
-                          <i key={i} className="marker small" style={{ left: `${c.x * 100}%`, top: `${c.y * 100}%`, background: c.hex }} />
-                        ))}
+                        {gradMode
+                          ? r.grad && <LineOverlay line={r.grad.line} stops={r.grad.stops} />
+                          : (r.colors ?? []).map((c, i) => (
+                              <i key={i} className="marker small" style={{ left: `${c.x * 100}%`, top: `${c.y * 100}%`, background: c.hex }} />
+                            ))}
                         <span className="pop-credit">{credit(r.photo)}</span>
                       </span>
                     </span>
@@ -434,7 +535,7 @@ export function Explore({ ctx }: { ctx: Ctx }) {
               <a href="https://unsplash.com/?utm_source=buni_palette&utm_medium=referral" target="_blank" rel="noreferrer">
                 Unsplash
               </a>
-              . Double-click a palette to open it, Space opens it full screen.
+              {gradMode ? ". Double-click a gradient to open it in Gradients." : ". Double-click a palette to open it, Space opens it full screen."}
             </span>
           </div>
         </>

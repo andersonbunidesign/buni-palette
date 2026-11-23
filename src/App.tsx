@@ -1,5 +1,9 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { hasProcess, metaOf, withoutPantone, AppState, GenState, Palette, Project, RefImage, PColor, colorCopy, flushState, migrate, sampleState, saveState, setSaveErrorHandler, uid } from "./store";
+import { hasProcess, metaOf, withoutPantone, AppState, GenState, Palette, Project, RefImage, PColor, colorCopy, flushState, migrate, sampleState, saveState, setSaveErrorHandler, uid, gradientsOf, gradSig, type Gradient, type GradState } from "./store";
+import { Gradients } from "./Gradients";
+import { GradientEditor, newGrad } from "./GradientEditor";
+import { cssBlock, css as gradCss } from "./gradient";
+import { gradientImage } from "./share";
 import { cmykProfileName, generate, setCmykTables } from "./color";
 import type { Book } from "./pantone";
 import { extract, loadImage } from "./extract";
@@ -21,9 +25,9 @@ import { paletteImage } from "./share";
 import { copyText } from "./References";
 
 /** Set from the desktop app when it starts. */
-export let VERSION = "1.1.3";
+export let VERSION = "1.2.0";
 
-export type View = "refs" | "gen" | "palettes" | "text" | "explore";
+export type View = "refs" | "gen" | "palettes" | "text" | "explore" | "grads" | "gedit";
 
 export interface MenuItem { label: string; icon?: React.ReactNode; onClick: (e: React.MouseEvent) => void; danger?: boolean; disabled?: boolean }
 
@@ -72,8 +76,23 @@ export interface Ctx {
   /** Stores an image in the library folder and reads its colours; doesn't add it to a project. */
   storeImage: (blob: Blob, name: string, extra?: Partial<RefImage>) => Promise<RefImage>;
   /** Adds palettes (and the images they came from) to a project. */
-  addToProject: (projectId: string, palettes: Palette[], refs: RefImage[]) => void;
+  addToProject: (projectId: string, palettes: Palette[], refs: RefImage[], gradients?: Gradient[]) => void;
   exportPalettes: (palettes: Palette[]) => void;
+  /** Export to Illustrator with gradients too. */
+  exportItems: (palettes: Palette[], gradients: Gradient[]) => void;
+  /** Gradient editor state of this project. */
+  grad: GradState;
+  setGrad: (g: GradState) => void;
+  /** Opens a saved gradient in the editor. */
+  openGradient: (id: string) => void;
+  /** Opens the editor on a new gradient; `init` fills it (from an image, a suggestion…). */
+  newGradient: (init?: Partial<GradState>) => void;
+  gradientActions: (g: Gradient, projectId: string, extra?: { rename?: () => void }) => MenuItem[];
+  sendGradients: (ids: string[], toProject: string, copy: boolean) => void;
+  /** Gradient to select when the grid opens (picked from the sidebar). */
+  focusGrad: string | null;
+  /** Set by the gradient editor: a colour clicked in the sidebar palettes goes into its selected stop. */
+  stopPick: React.MutableRefObject<((hex: string) => void) | null>;
   /** Projects of Buni Font Manager, when it's installed and the link is on. */
   fmProjects: FmProject[] | null;
   openSettings: () => void;
@@ -104,7 +123,9 @@ export function App() {
   const [compare, setCompare] = useState<Palette[] | null>(null);
   const [textTest, setTextTest] = useState<{ colors: TextTestColor[]; name: string; back: View } | null>(null);
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; items: MenuItem[] } | null>(null);
-  const [exporting, setExporting] = useState<Palette[] | null>(null);
+  const [exporting, setExporting] = useState<{ palettes: Palette[]; gradients: Gradient[] } | null>(null);
+  const [focusGrad, setFocusGrad] = useState<string | null>(null);
+  const stopPick = useRef<((hex: string) => void) | null>(null);
   const [fmProjects, setFmProjects] = useState<FmProject[] | null>(null);
   const [cmykVersion, setCmykVersion] = useState(0);
   const exploreDrop = useRef<((projectId: string) => void) | null>(null);
@@ -221,7 +242,7 @@ export function App() {
   // Ctrl+Z on Color Palettes undoes the last delete, move, copy, rename, duplicate or reorder.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (!(e.ctrlKey || e.metaKey) || e.shiftKey || e.key.toLowerCase() !== "z" || view !== "palettes") return;
+      if (!(e.ctrlKey || e.metaKey) || e.shiftKey || e.key.toLowerCase() !== "z" || (view !== "palettes" && view !== "grads")) return;
       const t = e.target as HTMLElement;
       if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT")) return;
       if (document.querySelector(".overlay, .compare")) return;
@@ -394,7 +415,7 @@ export function App() {
       { label: "Text on colour", onClick: () => { inProject(projectId); setGenFull(false); setTextTest({ colors: p.colors, name: p.name, back: "palettes" }); setView("text"); } },
       { label: "Copy values", onClick: (e) => copyText(p.colors.map((c) => colorCopy(c, state.mode)).join("\n"), e, ctx) },
       { label: "Share as image", onClick: () => sharePalette(p) },
-      { label: "Export to Illustrator", onClick: () => setExporting([p]) },
+      { label: "Export to Illustrator", onClick: () => setExporting({ palettes: [p], gradients: [] }) },
       ...(p.colors.some((c) => c.pantone || c.label)
         ? [
             {
@@ -447,6 +468,117 @@ export function App() {
     setTextTest(null);
     setView("gen");
     setGenFull(full ? "grid" : false);
+  };
+
+  const gradOf = (projectId: string) => state.grad?.[projectId] ?? newGrad();
+  const setGradIn = (projectId: string, g: GradState) => set((s) => ({ ...s, grad: { ...(s.grad ?? {}), [projectId]: g } }));
+  const openGradientIn = (projectId: string, id: string) => {
+    const pr = state.projects.find((x) => x.id === projectId);
+    const gr = pr && gradientsOf(pr).find((x) => x.id === id);
+    if (!pr || !gr) return;
+    const cur = gradOf(projectId);
+    const g: GradState = {
+      ...cur,
+      type: gr.type,
+      angle: gr.angle,
+      blend: gr.blend,
+      stops: gr.stops.map((x) => ({ ...x, locked: true })),
+      editing: gr.id,
+      name: undefined,
+      imageId: gr.imageId,
+      line: gr.line,
+      from: "gradients",
+      original: { type: gr.type, angle: gr.angle, blend: gr.blend, stops: gr.stops, imageId: gr.imageId, line: gr.line },
+    };
+    set((s) => ({ ...s, current: projectId, grad: { ...(s.grad ?? {}), [projectId]: { ...g, baseline: gradSig(g) } } }));
+    setConvertState(null);
+    setTextTest(null);
+    setGenFull(false);
+    setView("gedit");
+  };
+  const newGradientIn = (projectId: string, init?: Partial<GradState>) => {
+    const cur = gradOf(projectId);
+    const fresh = init?.stops ? null : newGrad();
+    const g: GradState = {
+      ...cur,
+      ...(fresh ? { stops: fresh.stops, blend: fresh.blend } : {}),
+      editing: undefined,
+      baseline: undefined,
+      original: undefined,
+      name: undefined,
+      imageId: undefined,
+      line: undefined,
+      from: "gradients",
+      ...init,
+    };
+    set((s) => ({ ...s, current: projectId, grad: { ...(s.grad ?? {}), [projectId]: g } }));
+    setConvertState(null);
+    setTextTest(null);
+    setGenFull(false);
+    setView("gedit");
+  };
+  const setGradients = (projectId: string, fn: (gs: Gradient[]) => Gradient[]) =>
+    set((s) => ({ ...s, projects: s.projects.map((pr) => (pr.id === projectId ? { ...pr, gradients: fn(gradientsOf(pr)) } : pr)) }));
+  const gradientActions = (g: Gradient, projectId: string, extra?: { rename?: () => void }): MenuItem[] => [
+    { label: "Open", onClick: () => openGradientIn(projectId, g.id) },
+    ...(extra?.rename ? [{ label: "Rename", onClick: extra.rename }] : []),
+    { label: "Copy CSS", onClick: (e: React.MouseEvent) => copyText(cssBlock(g), e, ctx) },
+    {
+      label: "Share as image",
+      onClick: async () => {
+        try {
+          await api.copyPng(await gradientImage(g));
+          toast(`Copied "${g.name}" as an image. Paste it anywhere.`);
+        } catch (e) {
+          toast(errText(e));
+        }
+      },
+    },
+    { label: "Export to Illustrator", onClick: () => setExporting({ palettes: [], gradients: [g] }) },
+    {
+      label: "Duplicate",
+      onClick: () => {
+        const copy: Gradient = { ...g, id: uid(), name: `${g.name} copy`, created: Date.now(), stops: g.stops.map((x) => ({ ...x })) };
+        checkpoint("duplicate");
+        setGradients(projectId, (gs) => {
+          const i = gs.findIndex((x) => x.id === g.id);
+          return [...gs.slice(0, i + 1), copy, ...gs.slice(i + 1)];
+        });
+        toast("Duplicated", true);
+      },
+    },
+    {
+      label: "Delete",
+      danger: true,
+      onClick: () => {
+        checkpoint("delete");
+        setGradients(projectId, (gs) => gs.filter((x) => x.id !== g.id));
+        toast(`Deleted "${g.name}"`, true);
+      },
+    },
+  ];
+  const sendGradients = (ids: string[], to: string, copy: boolean) => {
+    if (to === project.id) return;
+    const target = state.projects.find((p) => p.id === to);
+    const moving = gradientsOf(project).filter((g) => ids.includes(g.id));
+    if (!target || !moving.length) return;
+    const imgIds = new Set(moving.map((g) => g.imageId).filter(Boolean));
+    checkpoint(copy ? "copy" : "move");
+    set((s) => ({
+      ...s,
+      projects: s.projects.map((p) => {
+        if (p.id === to) {
+          const have = new Set(p.refs.map((r) => r.id));
+          const refs = project.refs.filter((r) => imgIds.has(r.id) && !have.has(r.id));
+          const gs = moving.map((m) => (copy ? { ...m, id: uid(), created: Date.now(), stops: m.stops.map((x) => ({ ...x })) } : m));
+          return { ...p, refs: [...p.refs, ...refs], gradients: [...gradientsOf(p), ...gs] };
+        }
+        if (p.id === project.id && !copy) return { ...p, gradients: gradientsOf(p).filter((x) => !ids.includes(x.id)) };
+        return p;
+      }),
+    }));
+    const what = moving.length === 1 ? `"${moving[0].name}"` : `${moving.length} gradients`;
+    toast(`${copy ? "Copied" : "Moved"} ${what} to ${target.name}`, true);
   };
 
   const newPaletteIn = (projectId: string) => {
@@ -537,12 +669,21 @@ export function App() {
     pasteClipboard,
     removeRef: (id) => updateProject((p) => ({ ...p, refs: p.refs.filter((x) => x.id !== id) })),
     storeImage,
-    addToProject: (projectId, palettes, refs) =>
+    addToProject: (projectId, palettes, refs, gradients = []) =>
       set((s) => ({
         ...s,
-        projects: s.projects.map((p) => (p.id === projectId ? { ...p, refs: [...refs, ...p.refs], palettes: [...p.palettes, ...palettes] } : p)),
+        projects: s.projects.map((p) => (p.id === projectId ? { ...p, refs: [...refs, ...p.refs], palettes: [...p.palettes, ...palettes], gradients: [...gradientsOf(p), ...gradients] } : p)),
       })),
-    exportPalettes: (ps) => setExporting(ps),
+    exportPalettes: (ps) => setExporting({ palettes: ps, gradients: [] }),
+    exportItems: (ps, gs) => setExporting({ palettes: ps, gradients: gs }),
+    grad: gradOf(project.id),
+    setGrad: (g) => setGradIn(project.id, g),
+    openGradient: (id) => openGradientIn(project.id, id),
+    newGradient: (init) => newGradientIn(project.id, init),
+    gradientActions: (g, projectId, extra) => gradientActions(g, projectId, extra),
+    sendGradients,
+    focusGrad,
+    stopPick,
     fmProjects,
     openSettings: () => setSettings(true),
     exploreDrop,
@@ -594,11 +735,12 @@ export function App() {
           {(
             [
               ["palettes", "Color Palettes"],
+              ["grads", "Gradients"],
               ["refs", "Image Sampling"],
               ["explore", "Keywords"],
             ] as [View, string][]
           ).map(([v, label]) => (
-            <button key={v} type="button" aria-pressed={!editingPalette && view === v} onClick={() => ctx.go(v)}>
+            <button key={v} type="button" aria-pressed={!editingPalette && (view === v || (v === "grads" && view === "gedit"))} onClick={() => ctx.go(v)}>
               {label}
             </button>
           ))}
@@ -678,7 +820,7 @@ export function App() {
                       if (dropOn !== p.id) setDropOn(p.id);
                       return;
                     }
-                    if (p.id === project.id || !types.includes("application/x-bp-palettes")) return;
+                    if (p.id === project.id || !(types.includes("application/x-bp-palettes") || types.includes("application/x-bp-gradients"))) return;
                     e.preventDefault();
                     e.dataTransfer.dropEffect = e.ctrlKey || e.metaKey ? "copy" : "move";
                     if (dropOn !== p.id) setDropOn(p.id);
@@ -688,7 +830,8 @@ export function App() {
                     ctx.contextMenu(e, [
                       { label: "Rename", onClick: () => { setRenaming(p.id); setRenameText(p.name); } },
                       { label: "New palette", onClick: () => newPaletteIn(p.id) },
-                      { label: collapsed.includes(p.id) ? "Show palettes" : "Hide palettes", onClick: () => set((s) => { const c = s.collapsed ?? []; return { ...s, collapsed: c.includes(p.id) ? c.filter((x) => x !== p.id) : [...c, p.id] }; }) },
+                      { label: "New gradient", onClick: () => newGradientIn(p.id) },
+                      { label: collapsed.includes(p.id) ? "Show palettes and gradients" : "Hide palettes and gradients", onClick: () => set((s) => { const c = s.collapsed ?? []; return { ...s, collapsed: c.includes(p.id) ? c.filter((x) => x !== p.id) : [...c, p.id] }; }) },
                       { label: "Delete project", danger: true, onClick: () => deleteProject(p.id) },
                     ])
                   }
@@ -700,6 +843,12 @@ export function App() {
                       exploreDrop.current?.(p.id);
                       return;
                     }
+                    const rawG = e.dataTransfer.getData("application/x-bp-gradients");
+                    if (rawG && p.id !== project.id) {
+                      e.preventDefault();
+                      sendGradients(JSON.parse(rawG) as string[], p.id, e.ctrlKey || e.metaKey);
+                      return;
+                    }
                     if (!raw || p.id === project.id) return;
                     e.preventDefault();
                     ctx.sendPalettes(JSON.parse(raw) as string[], p.id, e.ctrlKey || e.metaKey);
@@ -708,7 +857,7 @@ export function App() {
                   <button
                     type="button"
                     className="chev"
-                    aria-label={collapsed.includes(p.id) ? `Show ${p.name} palettes` : `Hide ${p.name} palettes`}
+                    aria-label={collapsed.includes(p.id) ? `Show ${p.name} palettes and gradients` : `Hide ${p.name} palettes and gradients`}
                     aria-expanded={!collapsed.includes(p.id)}
                     onClick={(e) => {
                       e.stopPropagation();
@@ -736,7 +885,7 @@ export function App() {
                     }}
                   >
                     <span className="name">{p.name}</span>
-                    <span className="count">{p.palettes.length}</span>
+                    <span className="count" title={`${p.palettes.length} palettes, ${gradientsOf(p).length} gradients`}>{p.palettes.length + gradientsOf(p).length}</span>
                   </button>
                   <button
                     type="button"
@@ -778,33 +927,91 @@ export function App() {
               ),
             ).flatMap((el, i) => {
               const p = state.projects[i];
-              if (collapsed.includes(p.id) || !p.palettes.length || renaming === p.id) return [el];
+              const grads = gradientsOf(p);
+              if (collapsed.includes(p.id) || (!p.palettes.length && !grads.length) || renaming === p.id) return [el];
+              const closed = state.closedSections ?? [];
+              const toggle = (key: string) => set((s) => { const c = s.closedSections ?? []; return { ...s, closedSections: c.includes(key) ? c.filter((x) => x !== key) : [...c, key] }; });
+              // While a gradient is being edited, colours in the palettes below are picked one by one.
+              const picking = view === "gedit" && p.id === project.id;
+              const section = (key: string, label: string, count: number, body: React.ReactNode) => (
+                <div key={key} className="side-sec">
+                  <button type="button" className="sec-head" aria-expanded={!closed.includes(key)} onClick={() => toggle(key)}>
+                    <IconChevron size={12} />
+                    <span>{label}</span>
+                    <span className="count">{count}</span>
+                  </button>
+                  {!closed.includes(key) && body}
+                </div>
+              );
               return [
                 el,
-                <div key={`${p.id}-minis`} className="minis">
-                  {p.palettes.map((pal) => (
-                    <button
-                      key={pal.id}
-                      type="button"
-                      className={`mini${p.id === project.id && focusPal === pal.id && view === "palettes" ? " on" : ""}`}
-                      title={pal.name}
-                      aria-label={`${pal.name} in ${p.name}`}
-                      onContextMenu={(e) => ctx.contextMenu(e, paletteActions(pal, p.id))}
-                      onDoubleClick={() => openIn(p.id, pal.id, false)}
-                      onClick={() => {
-                        set((s) => ({ ...s, current: p.id }));
-                        setTray([]);
-                        setConvertState(null);
-                        setGenFull(false);
-                        setFocusPal(pal.id);
-                        setView("palettes");
-                      }}
-                    >
-                      {pal.colors.map((c, j) => (
-                        <i key={j} style={{ background: c.hex }} />
-                      ))}
-                    </button>
-                  ))}
+                <div key={`${p.id}-minis`} className="side-secs">
+                  {p.palettes.length > 0 &&
+                    section(
+                      `${p.id}:p`,
+                      "Palettes",
+                      p.palettes.length,
+                      <div className={`minis${picking ? " picking" : ""}`}>
+                        {p.palettes.map((pal) => (
+                          <button
+                            key={pal.id}
+                            type="button"
+                            className={`mini${p.id === project.id && focusPal === pal.id && view === "palettes" ? " on" : ""}`}
+                            title={picking ? `${pal.name}: click a colour to put it in the selected stop` : pal.name}
+                            aria-label={`${pal.name} in ${p.name}`}
+                            onContextMenu={(e) => ctx.contextMenu(e, paletteActions(pal, p.id))}
+                            onDoubleClick={() => !picking && openIn(p.id, pal.id, false)}
+                            onClick={(e) => {
+                              if (picking) {
+                                // The colour under the pointer goes into the gradient.
+                                const r = e.currentTarget.getBoundingClientRect();
+                                const k = Math.min(pal.colors.length - 1, Math.max(0, Math.floor(((e.clientX - r.left) / r.width) * pal.colors.length)));
+                                stopPick.current?.(pal.colors[k].hex);
+                                return;
+                              }
+                              set((s) => ({ ...s, current: p.id }));
+                              setTray([]);
+                              setConvertState(null);
+                              setGenFull(false);
+                              setFocusPal(pal.id);
+                              setView("palettes");
+                            }}
+                          >
+                            {pal.colors.map((c, j) => (
+                              <i key={j} style={{ background: c.hex }} title={picking ? c.hex : undefined} />
+                            ))}
+                          </button>
+                        ))}
+                      </div>,
+                    )}
+                  {grads.length > 0 &&
+                    section(
+                      `${p.id}:g`,
+                      "Gradients",
+                      grads.length,
+                      <div className="minis">
+                        {grads.map((g) => (
+                          <button
+                            key={g.id}
+                            type="button"
+                            className={`mini gmini${p.id === project.id && ((focusGrad === g.id && view === "grads") || (view === "gedit" && ctx.grad.editing === g.id)) ? " on" : ""}`}
+                            style={{ background: gradCss({ ...g, type: "linear", angle: 90 }) }}
+                            title={g.name}
+                            aria-label={`${g.name} in ${p.name}`}
+                            onContextMenu={(e) => ctx.contextMenu(e, gradientActions(g, p.id))}
+                            onDoubleClick={() => openGradientIn(p.id, g.id)}
+                            onClick={() => {
+                              set((s) => ({ ...s, current: p.id }));
+                              setConvertState(null);
+                              setTextTest(null);
+                              setGenFull(false);
+                              setFocusGrad(g.id);
+                              setView("grads");
+                            }}
+                          />
+                        ))}
+                      </div>,
+                    )}
                 </div>,
               ];
             })}
@@ -812,7 +1019,7 @@ export function App() {
           <div className="side-foot">
             <p className="side-note">
               Drop images anywhere, or press <span className="kbd">Ctrl</span> + <span className="kbd">V</span> to add a screenshot to this
-              project. Drag palettes onto a project to move them; hold <span className="kbd">Ctrl</span> to copy.
+              project. Drag palettes or gradients onto a project to move them; hold <span className="kbd">Ctrl</span> to copy.
             </p>
             <a className="credit" href="https://andersonbunidesign.com" target="_blank" rel="noreferrer">
               Vibe coded by Anderson Santos · Version {VERSION}
@@ -820,7 +1027,7 @@ export function App() {
           </div>
         </nav>
 
-        <main className="main" key={project.id + (convertState ? "c" : "") + view + (view === "palettes" ? focusPal ?? "" : "")}>
+        <main className="main" key={project.id + (convertState ? "c" : "") + view + (view === "palettes" ? focusPal ?? "" : view === "grads" ? focusGrad ?? "" : "")}>
           {editingPalette ? (
             <Convert
               ctx={ctx}
@@ -848,6 +1055,10 @@ export function App() {
             <Explore ctx={ctx} />
           ) : view === "gen" ? (
             <Generator ctx={ctx} />
+          ) : view === "grads" ? (
+            <Gradients ctx={ctx} />
+          ) : view === "gedit" ? (
+            <GradientEditor ctx={ctx} />
           ) : (
             <Palettes ctx={ctx} />
           )}
@@ -871,7 +1082,7 @@ export function App() {
       )}
       {compare && <Compare ctx={ctx} palettes={compare} onClose={() => setCompare(null)} />}
       {ctxMenu && <ContextMenu {...ctxMenu} onClose={() => setCtxMenu(null)} />}
-      {exporting && <ExportDialog ctx={ctx} palettes={exporting} onClose={() => setExporting(null)} />}
+      {exporting && <ExportDialog ctx={ctx} palettes={exporting.palettes} gradients={exporting.gradients} onClose={() => setExporting(null)} />}
       {dragging && (
         <div className="drop-overlay">
           <div>Drop images to add them as references</div>

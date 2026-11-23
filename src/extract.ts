@@ -54,7 +54,7 @@ export async function loadImage(blob: Blob): Promise<LoadedImage> {
 
 const pixelCache = new Map<string, { data: Uint8ClampedArray; w: number; h: number }>();
 
-async function pixels(url: string, side = 160) {
+export async function pixels(url: string, side = 160) {
   const key = url + ":" + side;
   const hit = pixelCache.get(key);
   if (hit) return hit;

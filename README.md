@@ -1,7 +1,7 @@
 # Buni Palette
 
-Per-project colour palettes for packaging and brand work: collect references, generate harmonies,
-find palettes by keyword, match to Pantone, test text on colour, and export to Illustrator.
+Per-project colour palettes and gradients for packaging and brand work: collect references, generate harmonies
+and gradients, find palettes by keyword, match to Pantone, test text on colour, and export to Illustrator.
 
 Windows app built with Tauri 2, React and TypeScript, like Buni Font Manager. Every push to `main`
 builds the installer on GitHub and publishes it on the Releases page (download the `-setup.exe`).

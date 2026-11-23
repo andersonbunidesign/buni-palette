@@ -6,6 +6,7 @@ import { bookShort } from "./pantone";
 import { formatValue, type ValueMode } from "./color";
 import { nearest, type Book } from "./pantone";
 import type { Rule } from "./color";
+import type { Blend, GenMode, GStop, GradType, Line } from "./gradient";
 
 export interface PColor {
   hex: string;
@@ -47,6 +48,10 @@ export interface RefImage {
   seed?: number;
   /** The order the colours were dragged into (keys from swatchKey); unset means automatic first, then picked. */
   order?: string[];
+  /** Gradient mode: the line the gradient is read along (0–1), how many stops, and which automatic line. */
+  gline?: Line;
+  gstops?: number;
+  gseed?: number;
   /** Photos saved from Explore: who took them, for the credit Unsplash asks for. */
   source?: { author: string; authorUrl: string; photoUrl: string; keyword: string };
 }
@@ -67,12 +72,62 @@ export function refColors(r: RefImage): { s: import("./extract").Swatch; auto: b
 export const refUrl = (r: RefImage) => imageUrl(r.file);
 export const thumbUrl = (r: RefImage) => imageUrl(r.thumb || r.file);
 
+export interface Gradient {
+  id: string;
+  name: string;
+  type: GradType;
+  /** CSS angle for linear gradients: 0 points up, 90 points right. */
+  angle: number;
+  stops: GStop[];
+  blend: Blend;
+  /** Reference image it was read from, and the line it was read along (0–1 coordinates). */
+  imageId?: string;
+  line?: Line;
+  created: number;
+}
+
 export interface Project {
   id: string;
   name: string;
   refs: RefImage[];
   palettes: Palette[];
+  /** Missing in data from before 1.2. */
+  gradients?: Gradient[];
   example?: boolean;
+}
+
+/** The gradient editor's state, per project. */
+export interface GradState {
+  type: GradType;
+  angle: number;
+  stops: GStop[];
+  blend: Blend;
+  mode: GenMode;
+  /** Gradient being edited, if any. */
+  editing?: string;
+  /** Name base for a new gradient (the keyword in Keywords); the project name otherwise. */
+  name?: string;
+  /** What it looked like when opened or last saved (gradSig), to tell if there are unsaved changes. */
+  baseline?: string;
+  /** The saved gradient as it was when opened, for Original. */
+  original?: Omit<Gradient, "id" | "name" | "created">;
+  imageId?: string;
+  line?: Line;
+  /** Where Back (and Esc) goes. */
+  from?: "gradients" | "refs" | "explore";
+}
+
+export const gradSig = (g: { type: GradType; angle: number; stops: GStop[]; blend: Blend }) =>
+  JSON.stringify([g.type, Math.round(g.angle), g.blend, [...g.stops].sort((a, b) => a.pos - b.pos).map((s) => [s.hex, Math.round(s.pos * 1000)])]);
+
+export const gradientsOf = (p: Project) => p.gradients ?? [];
+
+/** Default gradient name: the project name (or keyword) and the next free number. */
+export function nextGradName(project: Project, base = project.name): string {
+  const names = new Set(gradientsOf(project).map((g) => g.name));
+  let n = 1;
+  while (names.has(`${base} ${n}`)) n++;
+  return `${base} ${n}`;
 }
 
 export interface GenState {
@@ -147,6 +202,10 @@ export interface AppState {
   books: Book[];
   /** Projects whose palettes are hidden in the sidebar. */
   collapsed?: string[];
+  /** Sidebar sections closed inside a project: "<project id>:p" for Palettes, "<project id>:g" for Gradients. */
+  closedSections?: string[];
+  /** Gradient editor, per project. */
+  grad?: Record<string, GradState>;
   gen: Record<string, GenState>;
 }
 
@@ -172,7 +231,11 @@ export function sampleState(): AppState {
       return { hex: best.hex, pantone: best.name, book: best.book };
     }),
   };
-  const p: Project = { id: uid(), name: "Example project", refs: [], palettes: [rgb1, pms, rgb2, rgb3], example: true };
+  const gradients: Gradient[] = [
+    { id: uid(), name: "Example project 1", type: "linear", angle: 135, blend: "oklab", created: Date.now() - 900, stops: [{ hex: "#F2EBDD", pos: 0 }, { hex: "#D9C9A8", pos: 0.45 }, { hex: "#B5532E", pos: 1 }] },
+    { id: uid(), name: "Example project 2", type: "linear", angle: 90, blend: "oklab", created: Date.now() - 800, stops: [{ hex: "#A8DADC", pos: 0 }, { hex: "#457B9D", pos: 0.55 }, { hex: "#1D3557", pos: 1 }] },
+  ];
+  const p: Project = { id: uid(), name: "Example project", refs: [], palettes: [rgb1, pms, rgb2, rgb3], gradients, example: true };
   return { projects: [p], current: p.id, mode: "hex", books: ["SC", "PC"], gen: {} };
 }
 
@@ -211,7 +274,7 @@ export function migrate(s: AppState): AppState {
       return { ...rest, colors: rest.colors.map((c) => (c.pantone && !c.book ? { ...c, book: legacy ?? (c.pantone.endsWith(" U") ? "SU" : "SC") } : c)) } as Palette;
     }),
   }));
-  return { ...s, books, projects: projects.map((p) => ({ ...p, refs: (p.refs ?? []).filter((r) => !!r.file) })) };
+  return { ...s, books, projects: projects.map((p) => ({ ...p, refs: (p.refs ?? []).filter((r) => !!r.file), gradients: p.gradients ?? [] })) };
 }
 
 /** Short guide label for a Pantone palette, e.g. "C" or "C + P&N C". */

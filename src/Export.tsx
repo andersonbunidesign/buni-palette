@@ -2,7 +2,8 @@ import { useEffect, useState } from "react";
 import { save } from "@tauri-apps/plugin-dialog";
 import { openPath } from "@tauri-apps/plugin-opener";
 import type { Ctx } from "./App";
-import { paletteTag, type Palette } from "./store";
+import { paletteTag, type Gradient, type Palette } from "./store";
+import { css, expandStops, sorted } from "./gradient";
 import { api, errText } from "./api";
 import { cmykProfileName } from "./color";
 import { IconArtwork, IconX } from "./icons";
@@ -16,8 +17,8 @@ function savedMode(): Mode {
   }
 }
 
-/** Export to Illustrator: one square per colour, a swatch group per palette. */
-export function ExportDialog({ ctx, palettes, onClose }: { ctx: Ctx; palettes: Palette[]; onClose: () => void }) {
+/** Export to Illustrator: one square per colour, a swatch group per palette, a gradient swatch and rectangle per gradient. */
+export function ExportDialog({ ctx, palettes, gradients = [], onClose }: { ctx: Ctx; palettes: Palette[]; gradients?: Gradient[]; onClose: () => void }) {
   const [mode, setMode] = useState<Mode>(savedMode);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -31,7 +32,7 @@ export function ExportDialog({ ctx, palettes, onClose }: { ctx: Ctx; palettes: P
   }, [onClose, busy]);
 
   const run = async () => {
-    const base = palettes.length === 1 ? palettes[0].name : ctx.project.name;
+    const base = palettes.length + gradients.length === 1 ? (palettes[0] ?? gradients[0]).name : ctx.project.name;
     const path = await save({ defaultPath: `${base.replace(/[\\/:*?"<>|]/g, "-")}.ai`, filters: [{ name: "Illustrator", extensions: ["ai"] }] });
     if (!path) return;
     try {
@@ -44,6 +45,13 @@ export function ExportDialog({ ctx, palettes, onClose }: { ctx: Ctx; palettes: P
     try {
       const out = await api.exportIllustrator(
         palettes.map((p) => ({ name: p.name, colors: p.colors.map((c) => ({ hex: c.hex, pantone: c.pantone, label: c.label })) })),
+        gradients.map((g) => ({
+          name: g.name,
+          radial: g.type === "radial",
+          angle: g.angle,
+          stops: expandStops(g, 6),
+          key: sorted(g.stops).map(({ hex, pos }) => ({ hex, pos })),
+        })),
         mode,
         path,
       );
@@ -78,13 +86,26 @@ export function ExportDialog({ ctx, palettes, onClose }: { ctx: Ctx; palettes: P
               {p.colors.some((c) => c.pantone) && <span className="badge pms">{paletteTag(p)}</span>}
             </div>
           ))}
+          {gradients.map((g) => (
+            <div key={g.id} className="export-row">
+              <span className="mini" style={{ background: css(g) }} />
+              <span className="export-name">{g.name}</span>
+              <span className="badge">Gradient</span>
+            </div>
+          ))}
         </div>
-        <p className="muted">
+        {gradients.length > 0 && (
+          <p className="muted">
+            Each gradient becomes a gradient swatch and a filled rectangle with its stops written under it.
+            {gradients.some((g) => g.blend !== "rgb") && " Illustrator blends in RGB or CMYK, so in-between stops are added to keep the smooth blend."}
+          </p>
+        )}
+        {palettes.length > 0 && <p className="muted">
           A square for every colour, with its values, and a swatch group per palette.{" "}
           {spots > 0
             ? `${spots} Pantone ${spots === 1 ? "colour becomes a named spot colour" : "colours become named spot colours"}; the other ${total - spots} ${total - spots === 1 ? "is a process colour" : "are process colours"}.`
             : "Every colour is a process colour."}
-        </p>
+        </p>}
         <div>
           <h3>Document colour mode</h3>
           <div className="seg small" role="group" aria-label="Document colour mode">
